@@ -42,5 +42,16 @@ nav:
     - Docs Site: developer/docs-site.md
   - Runbooks:
     - Hard-Won Learnings: runbooks/hard-won-learnings.md
+  - Platform Learnings:
+    - GitHub CLI: platform-learnings/github-cli.md
+    - Teams Graph API: platform-learnings/teams-graph-api.md
+    - Teams Bot Framework: platform-learnings/teams-bot-framework.md
+    - Teams Toolkit: platform-learnings/teams-toolkit.md
+    - MSAL & Entra Agent IDs: platform-learnings/msal-entra-agent-ids.md
+    - macOS Platform: platform-learnings/platform-macos.md
+    - Linux Platform: platform-learnings/platform-linux.md
+    - Windows Platform: platform-learnings/platform-windows.md
+    - Copilot Extensibility: platform-learnings/copilot-extensibility.md
+    - GitHub Copilot Extensions: platform-learnings/github-copilot-extensions.md
   - Decision Records:
     - Index: decisions/README.md
