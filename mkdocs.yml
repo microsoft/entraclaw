@@ -1,0 +1,46 @@
+site_name: "Openclaw Identity Research"
+site_description: "Securing agentic workflows on devices with Agent IDs and OBO flows"
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.instant
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.snippets
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Quickstart: getting-started/quickstart.md
+  - Architecture:
+    - System Overview: architecture/system-overview.md
+    - Enforcement Flow: architecture/enforcement-flow.md
+    - Layers:
+      - Platform Abstraction: architecture/layers/platform.md
+      - Auth & Token Flows: architecture/layers/auth.md
+      - Audit: architecture/layers/audit.md
+      - Teams Integration: architecture/layers/teams.md
+  - Reference:
+    - OBO Token Flows: reference/obo-flows.md
+  - Developer Guide:
+    - QA Log: developer/qa-log.md
+    - Docs Site: developer/docs-site.md
+  - Runbooks:
+    - Hard-Won Learnings: runbooks/hard-won-learnings.md
+  - Decision Records:
+    - Index: decisions/README.md
