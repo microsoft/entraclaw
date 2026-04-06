@@ -215,13 +215,15 @@ class TestExistingToolsRetrofitted:
 
         old_state = mcp_server._state.copy()
         try:
-            mcp_server._state.update({
-                "initialized": True,
-                "token": "old-token",
-                "config": mock_config,
-                "chat_id": "c1",
-                "token_acquired_at": time.monotonic(),
-            })
+            mcp_server._state.update(
+                {
+                    "initialized": True,
+                    "token": "old-token",
+                    "config": mock_config,
+                    "chat_id": "c1",
+                    "token_acquired_at": time.monotonic(),
+                }
+            )
 
             with patch(
                 "openclaw.mcp_server.acquire_agent_user_token",
@@ -245,14 +247,19 @@ class TestExistingToolsRetrofitted:
         respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
             side_effect=[
                 httpx.Response(401),
-                httpx.Response(200, json={"value": [
-                    {
-                        "id": "m1",
-                        "from": {"user": {"displayName": "Human"}},
-                        "body": {"content": "reply"},
-                        "createdDateTime": "2026-04-06T12:00:00Z",
+                httpx.Response(
+                    200,
+                    json={
+                        "value": [
+                            {
+                                "id": "m1",
+                                "from": {"user": {"displayName": "Human"}},
+                                "body": {"content": "reply"},
+                                "createdDateTime": "2026-04-06T12:00:00Z",
+                            },
+                        ]
                     },
-                ]}),
+                ),
             ]
         )
 
@@ -261,13 +268,15 @@ class TestExistingToolsRetrofitted:
 
         old_state = mcp_server._state.copy()
         try:
-            mcp_server._state.update({
-                "initialized": True,
-                "token": "old-token",
-                "config": mock_config,
-                "chat_id": "c1",
-                "token_acquired_at": time.monotonic(),
-            })
+            mcp_server._state.update(
+                {
+                    "initialized": True,
+                    "token": "old-token",
+                    "config": mock_config,
+                    "chat_id": "c1",
+                    "token_acquired_at": time.monotonic(),
+                }
+            )
 
             with patch(
                 "openclaw.mcp_server.acquire_agent_user_token",
@@ -332,13 +341,9 @@ class TestDedupHelpers:
         timestamps = {}
         for i in range(501):
             if i >= 451:
-                timestamps[f"msg-{i}"] = (
-                    now - timedelta(minutes=1)
-                ).isoformat()
+                timestamps[f"msg-{i}"] = (now - timedelta(minutes=1)).isoformat()
             else:
-                timestamps[f"msg-{i}"] = (
-                    now - timedelta(minutes=20)
-                ).isoformat()
+                timestamps[f"msg-{i}"] = (now - timedelta(minutes=20)).isoformat()
 
         pruned = _prune_seen_set(seen, timestamps)
         assert len(pruned) <= 500
@@ -355,29 +360,39 @@ class TestWatchTeamsReplies:
         respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
             side_effect=[
                 # First call: bootstrap — sets cursor
-                httpx.Response(200, json={"value": [
-                    {
-                        "id": "old-1",
-                        "from": {"user": {"displayName": "Human"}},
-                        "body": {"content": "old msg"},
-                        "createdDateTime": "2026-04-06T11:59:00Z",
+                httpx.Response(
+                    200,
+                    json={
+                        "value": [
+                            {
+                                "id": "old-1",
+                                "from": {"user": {"displayName": "Human"}},
+                                "body": {"content": "old msg"},
+                                "createdDateTime": "2026-04-06T11:59:00Z",
+                            },
+                        ]
                     },
-                ]}),
+                ),
                 # Second call: new messages
-                httpx.Response(200, json={"value": [
-                    {
-                        "id": "new-1",
-                        "from": {"user": {"displayName": "Human"}},
-                        "body": {"content": "do something"},
-                        "createdDateTime": "2026-04-06T12:00:05Z",
+                httpx.Response(
+                    200,
+                    json={
+                        "value": [
+                            {
+                                "id": "new-1",
+                                "from": {"user": {"displayName": "Human"}},
+                                "body": {"content": "do something"},
+                                "createdDateTime": "2026-04-06T12:00:05Z",
+                            },
+                            {
+                                "id": "agent-1",
+                                "from": {"user": {"displayName": "Openclaw Agent"}},
+                                "body": {"content": "sure thing"},
+                                "createdDateTime": "2026-04-06T12:00:06Z",
+                            },
+                        ]
                     },
-                    {
-                        "id": "agent-1",
-                        "from": {"user": {"displayName": "Openclaw Agent"}},
-                        "body": {"content": "sure thing"},
-                        "createdDateTime": "2026-04-06T12:00:06Z",
-                    },
-                ]}),
+                ),
             ]
         )
 
@@ -387,16 +402,18 @@ class TestWatchTeamsReplies:
 
         old_state = mcp_server._state.copy()
         try:
-            mcp_server._state.update({
-                "initialized": True,
-                "token": "token",
-                "config": mock_config,
-                "chat_id": "c1",
-                "token_acquired_at": time.monotonic(),
-                "last_seen_timestamp": None,
-                "seen_message_ids": set(),
-                "seen_id_timestamps": {},
-            })
+            mcp_server._state.update(
+                {
+                    "initialized": True,
+                    "token": "token",
+                    "config": mock_config,
+                    "chat_id": "c1",
+                    "token_acquired_at": time.monotonic(),
+                    "last_seen_timestamp": None,
+                    "seen_message_ids": set(),
+                    "seen_id_timestamps": {},
+                }
+            )
 
             with patch("openclaw.mcp_server.acquire_agent_user_token", mock_acquire):
                 result_json = await mcp_server.watch_teams_replies(timeout=5, interval=0)
@@ -417,14 +434,19 @@ class TestWatchTeamsReplies:
         from openclaw import mcp_server
 
         respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
-            return_value=httpx.Response(200, json={"value": [
-                {
-                    "id": "old-1",
-                    "from": {"user": {"displayName": "Human"}},
-                    "body": {"content": "old"},
-                    "createdDateTime": "2026-04-06T11:59:00Z",
+            return_value=httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": "old-1",
+                            "from": {"user": {"displayName": "Human"}},
+                            "body": {"content": "old"},
+                            "createdDateTime": "2026-04-06T11:59:00Z",
+                        },
+                    ]
                 },
-            ]})
+            )
         )
 
         mock_config = MagicMock()
@@ -432,16 +454,18 @@ class TestWatchTeamsReplies:
 
         old_state = mcp_server._state.copy()
         try:
-            mcp_server._state.update({
-                "initialized": True,
-                "token": "token",
-                "config": mock_config,
-                "chat_id": "c1",
-                "token_acquired_at": time.monotonic(),
-                "last_seen_timestamp": None,
-                "seen_message_ids": set(),
-                "seen_id_timestamps": {},
-            })
+            mcp_server._state.update(
+                {
+                    "initialized": True,
+                    "token": "token",
+                    "config": mock_config,
+                    "chat_id": "c1",
+                    "token_acquired_at": time.monotonic(),
+                    "last_seen_timestamp": None,
+                    "seen_message_ids": set(),
+                    "seen_id_timestamps": {},
+                }
+            )
 
             with patch("openclaw.mcp_server.acquire_agent_user_token", MagicMock()):
                 result_json = await mcp_server.watch_teams_replies(timeout=1, interval=0)
@@ -462,23 +486,33 @@ class TestWatchTeamsReplies:
         respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
             side_effect=[
                 # Bootstrap call
-                httpx.Response(200, json={"value": [
-                    {
-                        "id": "m0",
-                        "from": {"user": {"displayName": "Human"}},
-                        "body": {"content": "seed"},
-                        "createdDateTime": "2026-04-06T11:59:00Z",
+                httpx.Response(
+                    200,
+                    json={
+                        "value": [
+                            {
+                                "id": "m0",
+                                "from": {"user": {"displayName": "Human"}},
+                                "body": {"content": "seed"},
+                                "createdDateTime": "2026-04-06T11:59:00Z",
+                            },
+                        ]
                     },
-                ]}),
+                ),
                 # First watch: new message
-                httpx.Response(200, json={"value": [
-                    {
-                        "id": "m1",
-                        "from": {"user": {"displayName": "Human"}},
-                        "body": {"content": "first"},
-                        "createdDateTime": "2026-04-06T12:00:05Z",
+                httpx.Response(
+                    200,
+                    json={
+                        "value": [
+                            {
+                                "id": "m1",
+                                "from": {"user": {"displayName": "Human"}},
+                                "body": {"content": "first"},
+                                "createdDateTime": "2026-04-06T12:00:05Z",
+                            },
+                        ]
                     },
-                ]}),
+                ),
             ]
         )
 
@@ -487,22 +521,83 @@ class TestWatchTeamsReplies:
 
         old_state = mcp_server._state.copy()
         try:
-            mcp_server._state.update({
-                "initialized": True,
-                "token": "token",
-                "config": mock_config,
-                "chat_id": "c1",
-                "token_acquired_at": time.monotonic(),
-                "last_seen_timestamp": None,
-                "seen_message_ids": set(),
-                "seen_id_timestamps": {},
-            })
+            mcp_server._state.update(
+                {
+                    "initialized": True,
+                    "token": "token",
+                    "config": mock_config,
+                    "chat_id": "c1",
+                    "token_acquired_at": time.monotonic(),
+                    "last_seen_timestamp": None,
+                    "seen_message_ids": set(),
+                    "seen_id_timestamps": {},
+                }
+            )
 
             with patch("openclaw.mcp_server.acquire_agent_user_token", MagicMock()):
                 await mcp_server.watch_teams_replies(timeout=5, interval=0)
 
             assert mcp_server._state["last_seen_timestamp"] == "2026-04-06T12:00:05Z"
             assert "m1" in mcp_server._state["seen_message_ids"]
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+
+
+class TestRateLimitHandling:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_429_propagates_from_watch(self) -> None:
+        """watch_teams_replies should propagate RateLimitError from read()."""
+        from openclaw import mcp_server
+        from openclaw.errors import RateLimitError
+
+        respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            side_effect=[
+                # Bootstrap call succeeds
+                httpx.Response(
+                    200,
+                    json={
+                        "value": [
+                            {
+                                "id": "m0",
+                                "from": {"user": {"displayName": "Human"}},
+                                "body": {"content": "seed"},
+                                "createdDateTime": "2026-04-06T11:59:00Z",
+                            },
+                        ]
+                    },
+                ),
+                # Second call: 429
+                httpx.Response(429, headers={"Retry-After": "30"}),
+            ]
+        )
+
+        mock_config = MagicMock()
+        mock_config.agent_user_upn = "Openclaw Agent"
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.update(
+                {
+                    "initialized": True,
+                    "token": "token",
+                    "config": mock_config,
+                    "chat_id": "c1",
+                    "token_acquired_at": time.monotonic(),
+                    "last_seen_timestamp": None,
+                    "seen_message_ids": set(),
+                    "seen_id_timestamps": {},
+                }
+            )
+
+            with (
+                patch("openclaw.mcp_server.acquire_agent_user_token", MagicMock()),
+                pytest.raises(RateLimitError) as exc_info,
+            ):
+                await mcp_server.watch_teams_replies(timeout=5, interval=0)
+
+            assert exc_info.value.retry_after == 30
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)

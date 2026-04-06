@@ -130,6 +130,60 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 **Fix:** Use `requests.post("https://graph.microsoft.com/v1.0/oauth2PermissionGrants", ...)` directly instead of `graph_request()`. Also changed the error from a WARNING (non-blocking) to `sys.exit(1)` (blocking) because without consent, hop 3 always fails.
 **Prevention:** When a Graph API exists on both v1.0 and beta, use v1.0 for stability. Don't assume `graph_request()` is correct for everything — check which API version the endpoint needs.
 
+### Learning #16: Graph API $filter and $orderby Unreliable for Chat Messages
+
+**Date:** 2026-04-06
+**Context:** Designing bidirectional Teams polling loop, researching existing Teams MCP servers
+**Problem:** Graph API chat message endpoints don't reliably support `$orderby` or `$filter`. Requesting ascending order returns errors. Server-side filtering produces inconsistent results.
+**Root cause:** Confirmed by floriscornel/teams-mcp (most feature-complete Teams MCP server, 9k+ users). This appears to be a Graph API limitation for `/chats/{id}/messages` endpoints specifically.
+**Fix:** Always sort and filter client-side after retrieval. Never trust Graph API server-side filtering for chat messages.
+**Prevention:** Treat Graph API response ordering as "newest-first, descending only" for chat messages. Do all filtering in Python.
+
+### Learning #17: Timestamp-Based Polling Needs Overlap Window for Message Boundary Safety
+
+**Date:** 2026-04-06
+**Context:** Designing message dedup for `watch_teams_replies`, researching iMessage MCP servers
+**Problem:** Polling with `WHERE sent_at > last_seen_timestamp` can miss messages that arrive at the exact timestamp boundary due to clock precision and write ordering.
+**Root cause:** photon-hq/imessage-kit (reference iMessage SDK) documented this: messages written to the database at the same clock tick as the poll cutoff may be missed if the poll fires before the write commits.
+**Fix:** Use a 2-second overlap window: query `sent_at >= last_seen_timestamp - 2s`, then filter duplicates via a message ID seen-set. The overlap guarantees boundary messages are caught; the seen-set prevents reprocessing.
+**Prevention:** Never use strict `>` comparison for timestamp-based polling. Always overlap + dedup.
+
+### Learning #18: Token Refresh Is the #1 Pain Point Across All MCP Messaging Servers
+
+**Date:** 2026-04-06
+**Context:** Researching Slack, iMessage, Discord, and Teams MCP servers for bidirectional loop design
+**Problem:** The official Slack MCP server (mcp.slack.com) has 1-hour OAuth tokens with NO refresh token, causing 18 re-authentications over 5 days (anthropics/claude-code#29257). Our three-hop OBO flow is even more complex.
+**Root cause:** OAuth token expiry is the universal pain point. Every MCP messaging server that doesn't handle refresh creates user-facing auth failures during active sessions.
+**Fix:** Eager refresh (55-min threshold, 5-min buffer) + lazy retry (catch 401, re-auth, retry once). Both update the same `_state` fields.
+**Prevention:** For the three-hop flow specifically: all three hops share the same ~60-min expiry window since they're acquired sequentially. Refreshing the full chain (all 3 hops) is simpler than tracking per-hop expiry. Monitor for edge cases — nobody else has refreshed a chained OBO flow mid-session.
+
+### Learning #19: Every MCP Messaging Server Uses Stateless Request-Response, Not Background Polling
+
+**Date:** 2026-04-06
+**Context:** Researching polling patterns across Slack, iMessage, Discord, and Teams MCP servers
+**Problem:** We considered background polling threads and CronCreate-based approaches for the bidirectional loop.
+**Root cause:** The MCP protocol's request-response model maps naturally to on-demand tool calls. The LLM decides when to check for messages. Background polling requires a push notification mechanism, but Claude Desktop doesn't support MCP resource subscriptions.
+**Fix:** Our design — a blocking `watch_teams_replies` tool that polls internally — aligns with the ecosystem pattern. The LLM calls it explicitly, and it blocks for up to `timeout` seconds.
+**Prevention:** Don't fight the MCP model. On-demand polling tools are the pragmatic choice until the MCP Tasks primitive (experimental, spec 2025-11-25) is broadly supported.
+
+### Learning #20: Bounded Seen-Set Prevents Memory Leaks in Long-Running MCP Servers
+
+**Date:** 2026-04-06
+**Context:** Designing message dedup for long-running polling sessions
+**Problem:** A naive dedup approach (append every message ID to a set forever) leaks memory proportional to session length.
+**Root cause:** photon-hq/imessage-kit solved this with threshold-triggered cleanup: when the Map exceeds 10,000 entries, prune to only the last hour's records.
+**Fix:** Cap seen-set at 500 entries (our volume is much lower than iMessage). When threshold is hit, prune to IDs from last 10 minutes.
+**Prevention:** Always bound in-memory state in long-running processes. Define a cleanup threshold and retention window.
+
+### Learning #21: Graph API Delta Queries — Powerful but Complex, Deferred for Now
+
+**Date:** 2026-04-06
+**Context:** Evaluating cursor strategies for Teams message polling
+**Problem:** Graph API's `/chats/{id}/messages/delta` returns a `$deltaLink` token (monotonic cursor, no clock issues), but adds complexity: delta responses include `@removed` entries (deleted messages), read-state changes, and unexpected change types that don't match the original filter.
+**Root cause:** Delta queries are designed for sync scenarios (mailbox sync, etc.), not simple "what's new" polling. The extra event types require handling code that adds surface area for bugs.
+**Fix:** Start with timestamp overlap + message ID seen-set (proven by iMessage servers, simpler). Defer delta queries as an optimization for when polling volume increases or timestamp approach proves insufficient.
+**Prevention:** Evaluate the full contract of an API before adopting it. Delta queries solve a different problem (bidirectional sync) than what we need (new message detection).
+
 ---
 
 ## Historical Learnings

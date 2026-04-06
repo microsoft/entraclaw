@@ -72,13 +72,15 @@ def acquire_agent_user_token(config: OpenclawConfig) -> str:
     Raises ``AgentIDNotAvailable`` if config is incomplete,
     or ``TokenExchangeError`` if any hop fails.
     """
-    if not all([
-        config.blueprint_app_id,
-        config.blueprint_secret,
-        config.tenant_id,
-        config.agent_id,
-        config.agent_user_id,
-    ]):
+    if not all(
+        [
+            config.blueprint_app_id,
+            config.blueprint_secret,
+            config.tenant_id,
+            config.agent_id,
+            config.agent_user_id,
+        ]
+    ):
         raise AgentIDNotAvailable(
             "Agent User credentials not configured. Run ./scripts/setup.sh first."
         )
@@ -91,26 +93,32 @@ def acquire_agent_user_token(config: OpenclawConfig) -> str:
     # The Blueprint authenticates with its client_secret and requests a token
     # scoped for Agent Identity impersonation (fmi_path=AgentIdentity).
     with httpx.Client(timeout=timeout) as client:
-        hop1_resp = client.post(url, data={
-            "client_id": config.blueprint_app_id,
-            "scope": "api://AzureADTokenExchange/.default",
-            "fmi_path": config.agent_id,
-            "grant_type": "client_credentials",
-            "client_secret": config.blueprint_secret,
-        })
+        hop1_resp = client.post(
+            url,
+            data={
+                "client_id": config.blueprint_app_id,
+                "scope": "api://AzureADTokenExchange/.default",
+                "fmi_path": config.agent_id,
+                "grant_type": "client_credentials",
+                "client_secret": config.blueprint_secret,
+            },
+        )
     t1_token = _check_token_response("hop1:blueprint", hop1_resp.json())
 
     # Hop 2: Agent Identity exchange token (T2)
     # The Agent Identity presents T1 as its client assertion.
     # Entra validates T1.aud == Agent Identity's parent (Blueprint).
     with httpx.Client(timeout=timeout) as client:
-        hop2_resp = client.post(url, data={
-            "client_id": config.agent_id,
-            "scope": "api://AzureADTokenExchange/.default",
-            "grant_type": "client_credentials",
-            "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-            "client_assertion": t1_token,
-        })
+        hop2_resp = client.post(
+            url,
+            data={
+                "client_id": config.agent_id,
+                "scope": "api://AzureADTokenExchange/.default",
+                "grant_type": "client_credentials",
+                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                "client_assertion": t1_token,
+            },
+        )
     t2_token = _check_token_response("hop2:agent_identity", hop2_resp.json())
 
     # Hop 3: Agent User resource token via user_fic grant
@@ -118,16 +126,19 @@ def acquire_agent_user_token(config: OpenclawConfig) -> str:
     # Entra validates T2.aud == Agent Identity, then issues a delegated token
     # with idtyp=user for the Agent User.
     with httpx.Client(timeout=timeout) as client:
-        hop3_resp = client.post(url, data={
-            "client_id": config.agent_id,
-            "scope": "https://graph.microsoft.com/.default",
-            "grant_type": "user_fic",
-            "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-            "client_assertion": t1_token,
-            "user_id": config.agent_user_id,
-            "user_federated_identity_credential": t2_token,
-            "requested_token_use": "on_behalf_of",
-        })
+        hop3_resp = client.post(
+            url,
+            data={
+                "client_id": config.agent_id,
+                "scope": "https://graph.microsoft.com/.default",
+                "grant_type": "user_fic",
+                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                "client_assertion": t1_token,
+                "user_id": config.agent_user_id,
+                "user_federated_identity_credential": t2_token,
+                "requested_token_use": "on_behalf_of",
+            },
+        )
     resource_token = _check_token_response("hop3:agent_user", hop3_resp.json())
 
     return resource_token
@@ -157,20 +168,19 @@ async def create_or_find_chat(
         {
             "@odata.type": "#microsoft.graph.aadUserConversationMember",
             "roles": ["owner"],
-            "user@odata.bind": (
-                f"https://graph.microsoft.com/v1.0/users('{human_user_id}')"
-            ),
+            "user@odata.bind": (f"https://graph.microsoft.com/v1.0/users('{human_user_id}')"),
         },
     ]
     # Add Agent User as explicit member if ID is provided
     if agent_user_id:
-        members.insert(0, {
-            "@odata.type": "#microsoft.graph.aadUserConversationMember",
-            "roles": ["owner"],
-            "user@odata.bind": (
-                f"https://graph.microsoft.com/v1.0/users('{agent_user_id}')"
-            ),
-        })
+        members.insert(
+            0,
+            {
+                "@odata.type": "#microsoft.graph.aadUserConversationMember",
+                "roles": ["owner"],
+                "user@odata.bind": (f"https://graph.microsoft.com/v1.0/users('{agent_user_id}')"),
+            },
+        )
 
     chat_payload = {
         "chatType": "oneOnOne",
@@ -299,8 +309,4 @@ def filter_human_messages(
 
     All filtering is client-side — Graph API ``$filter`` is unreliable for chat messages.
     """
-    return [
-        m
-        for m in messages
-        if m.get("from") not in (agent_user_display_name, "unknown")
-    ]
+    return [m for m in messages if m.get("from") not in (agent_user_display_name, "unknown")]

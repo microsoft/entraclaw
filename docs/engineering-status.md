@@ -2,7 +2,7 @@
 
 **Date:** April 6, 2026
 **Team:** Brandon Werner
-**Status:** End-to-end working — Agent User sends Teams messages from Copilot CLI. 64 tests, 87% coverage. Next: bidirectional Teams loop.
+**Status:** Bidirectional loop working — Agent User sends and polls for Teams messages. 82 tests, 91% coverage. 5 MCP tools live.
 
 ---
 
@@ -20,14 +20,15 @@ A proof-of-concept demonstrating that **device-local AI agents can have their ow
 | 2. Copilot CLI with MCP | MCP server starts, three-hop flow acquires Agent User token | ✅ Working |
 | 3. `send_teams_message` | Agent sends message to human in Teams as "Openclaw Agent" with AI agent badge | ✅ Working |
 | 4. `read_teams_messages` | Agent reads human's replies from Teams | ✅ Working |
-| 5. Bidirectional loop | Agent polls for replies, acts on instructions, reports back | 🔄 Next milestone |
+| 5. Bidirectional loop | Agent polls for replies, acts on instructions, reports back | ✅ Working |
 
-### MCP Tools (4 total)
+### MCP Tools (5 total)
 
 | Tool | Purpose | Status |
 |------|---------|--------|
-| `send_teams_message` | Send message to human in Teams | ✅ Live |
-| `read_teams_messages` | Read human's replies from Teams | ✅ Live |
+| `send_teams_message` | Send message to human in Teams | ✅ Live (+ token refresh) |
+| `read_teams_messages` | Read human's replies from Teams | ✅ Live (+ token refresh) |
+| `watch_teams_replies` | Poll for new human replies with dedup | ✅ Live |
 | `whoami` | Show agent identity and connection status | ✅ Live |
 | `audit_log` | Record audit event before actions | ✅ Live |
 
@@ -58,27 +59,32 @@ TOTAL                                 245     33    87%
 
 ## Current Milestone: Bidirectional Teams Loop
 
-The agent can send messages and read replies, but there's no automated loop. The human replies in Teams, but the agent doesn't know to check unless explicitly told.
+**Spec:** `docs/superpowers/specs/2026-04-06-bidirectional-teams-loop-design.md`
+**Research:** `docs/platform-learnings/mcp-messaging-servers.md`
 
-### What Needs Building
+### Scope (scoped down from original)
 
-1. **`watch_teams_replies` tool** — polls Teams every N seconds, returns when the human replies. Needs message deduplication (track last-seen message ID so old messages aren't reprocessed).
+1. **`watch_teams_replies` tool** — blocking polling tool with server-side cursor, timestamp overlap + message ID dedup
+2. **Token auto-refresh** — eager (55-min threshold) + lazy (retry on 401) for three-hop flow
 
-2. **Conversation state** — the agent needs to know what it was working on when the human replies (e.g., "I was editing hello.py when the human asked me to add Brandon to the string").
+**Out of scope (LLM handles natively):** Conversation state tracking, action dispatch.
 
-3. **Action dispatch** — when the human says "add Brandon to the Hello World string", the agent parses that as an instruction and executes it, then reports back via Teams.
+### Design Decisions Informed by Platform Research
 
-4. **Token refresh** — the three-hop tokens expire after ~60 min. Long-running polling needs automatic re-acquisition.
+Researched 12+ MCP messaging servers (Slack, iMessage, Discord, Teams). Key findings that changed the design:
 
-### Design Options
+- **Every MCP messaging server uses stateless request-response** — no background polling. Our blocking poll tool aligns with ecosystem patterns.
+- **Client-side filtering mandatory** — Graph API `$filter`/`$orderby` unreliable for chat messages (Learning #16)
+- **Timestamp overlap + seen-set dedup** — proven by imessage-kit (2s overlap, Map dedup). Prevents boundary message loss (Learning #17)
+- **Token refresh is universal #1 pain point** — official Slack MCP had 18 re-auths in 5 days. Our three-hop flow is the most complex token lifecycle of any MCP messaging server studied (Learning #18)
+- **Delta queries deferred** — too much complexity upfront (`@removed` entries, change types). Start simple (Learning #21)
 
-| Approach | Pros | Cons |
-|----------|------|------|
-| **Polling tool** (`watch_teams_replies`) | Simple, LLM calls it explicitly | LLM must remember to call it; burns context |
-| **Background polling thread** in MCP server | Automatic, no LLM involvement | Needs a way to notify the LLM of new messages |
-| **CronCreate** in Claude Code | Uses the built-in scheduler | Tight coupling to Claude Code runtime |
+### Known Unknowns (Will Discover During Implementation)
 
-Recommended: **Polling tool first** (simplest, works today), then add background polling as a follow-up.
+1. **Overlap window size** — 2s borrowed from iMessage/SQLite; Graph API latency may need 3-5s
+2. **Three-hop refresh behavior** — nobody else has refreshed a chained OBO flow mid-session
+3. **Agent User token + `$orderby`** — floriscornel uses MSAL delegated tokens; our `user_fic` grant may behave differently
+4. **Rate limiting thresholds** — undocumented for our endpoint + token type combination
 
 ---
 
@@ -94,15 +100,15 @@ Recommended: **Polling tool first** (simplest, works today), then add background
 - MCP server auto-discovered via `.mcp.json`
 - `--teams-user` flag to set Teams recipient separately from admin
 - Teams read with null-from handling (system messages)
-- 16 hard-won learnings documented in runbooks
-- All code passes ruff lint + format, 87% coverage
+- 21 hard-won learnings documented in runbooks (6 new from platform research)
+- Bidirectional Teams polling loop with dedup + token refresh
+- Token auto-refresh: eager (55-min) + lazy (401 retry) for all tools
+- 429 rate limit handling propagates through polling tool
+- All code passes ruff lint + format, 91% coverage
 
 ### What's Not Started
-- Bidirectional Teams polling loop (NEXT)
-- Token auto-refresh for long-running sessions
 - Windows VM provisioning and testing
 - AppContainer sandbox spike
-- Graph API rate limit handler
 - Entra sign-in log verification (`idtyp=user` claim)
 
 ---
@@ -165,14 +171,15 @@ Blueprint (client_credentials)
 | 13 | stderr swallowed throughout scripts | Hidden errors | Removed all `2>/dev/null` |
 | 14 | Admin and Teams user conflated | Wrong recipient | Added `--teams-user` flag |
 
-See `docs/runbooks/hard-won-learnings.md` for the full append-only log (16 entries).
+See `docs/runbooks/hard-won-learnings.md` for the full append-only log (21 entries).
 
 ---
 
 ## Next Steps (Priority Order)
 
-1. **Bidirectional Teams loop** — `watch_teams_replies` polling tool + message dedup + action dispatch
-2. **Token auto-refresh** — re-acquire three-hop tokens before 60-min expiry
+1. **~~Bidirectional Teams loop~~** — IMPLEMENTING NOW. `watch_teams_replies` polling tool + timestamp overlap dedup + token refresh. See spec.
+2. **~~Token auto-refresh~~** — IMPLEMENTING NOW. Bundled with #1. Eager (55-min) + lazy (401 retry).
 3. **Entra sign-in log verification** — confirm `idtyp=user` and agent attribution
 4. **Windows VM provisioning** — verify cross-platform setup.sh
 5. **AppContainer sandbox spike** — kernel-level agent isolation on Windows
+6. **Delta query optimization** — replace timestamp polling with `/messages/delta` if needed (deferred from #1)

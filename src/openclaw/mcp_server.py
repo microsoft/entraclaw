@@ -130,11 +130,7 @@ def _prune_seen_set(
     """
     cutoff = datetime.now(UTC) - timedelta(minutes=SEEN_SET_PRUNE_MINUTES)
     cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
-    return {
-        msg_id
-        for msg_id in seen_ids
-        if id_timestamps.get(msg_id, "") >= cutoff_str
-    }
+    return {msg_id for msg_id in seen_ids if id_timestamps.get(msg_id, "") >= cutoff_str}
 
 
 async def _initialize() -> None:
@@ -298,7 +294,9 @@ async def watch_teams_replies(timeout: int = 30, interval: int = 5) -> str:
     if _state.get("last_seen_timestamp") is None:
         await _ensure_valid_token()
         bootstrap_msgs = await _with_token_retry(
-            read, chat_id=str(chat_id), count=10,
+            read,
+            chat_id=str(chat_id),
+            count=10,
         )
         if bootstrap_msgs:
             newest = max(bootstrap_msgs, key=lambda m: m.get("sent_at", ""))
@@ -315,7 +313,9 @@ async def watch_teams_replies(timeout: int = 30, interval: int = 5) -> str:
         await _ensure_valid_token()
 
         raw_messages = await _with_token_retry(
-            read, chat_id=str(chat_id), count=10,
+            read,
+            chat_id=str(chat_id),
+            count=10,
         )
 
         # Client-side filtering: human only, then dedup
@@ -348,19 +348,25 @@ async def watch_teams_replies(timeout: int = 30, interval: int = 5) -> str:
 
             # Return newest-last (Graph returns newest-first)
             new_msgs.sort(key=lambda m: m.get("sent_at", ""))
-            return json.dumps({
-                "messages": new_msgs,
-                "timed_out": False,
-                "poll_count": poll_count,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "messages": new_msgs,
+                    "timed_out": False,
+                    "poll_count": poll_count,
+                },
+                indent=2,
+            )
 
         elapsed = time.monotonic() - start
         if elapsed >= timeout:
-            return json.dumps({
-                "messages": [],
-                "timed_out": True,
-                "poll_count": poll_count,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "messages": [],
+                    "timed_out": True,
+                    "poll_count": poll_count,
+                },
+                indent=2,
+            )
 
         if interval > 0:
             await asyncio.sleep(interval)
