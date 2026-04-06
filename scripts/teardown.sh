@@ -14,7 +14,7 @@ NC='\033[0m'
 
 # Load existing config (non-fatal if missing)
 # shellcheck disable=SC1091
-source .env 2>/dev/null || true
+source .env || true
 
 echo -e "${YELLOW}⚠️  This will delete the Openclaw Agent Identity, Blueprint, and all cached credentials.${NC}"
 read -p "Are you sure? (y/N) " -n 1 -r
@@ -28,7 +28,7 @@ fi
 # ── Delete Agent Identity (service principal) ───────────────────────────────
 
 if [ -n "${OPENCLAW_AGENT_OBJECT_ID:-}" ]; then
-    if az ad sp delete --id "$OPENCLAW_AGENT_OBJECT_ID" 2>/dev/null; then
+    if az ad sp delete --id "$OPENCLAW_AGENT_OBJECT_ID"; then
         echo -e "  ${GREEN}✅ Deleted Agent Identity SP ($OPENCLAW_AGENT_OBJECT_ID)${NC}"
     else
         echo -e "  ${YELLOW}⚠️  Could not delete Agent Identity SP — may already be deleted${NC}"
@@ -40,7 +40,7 @@ fi
 # ── Delete Blueprint (app registration) ─────────────────────────────────────
 
 if [ -n "${OPENCLAW_BLUEPRINT_OBJECT_ID:-}" ]; then
-    if az ad app delete --id "$OPENCLAW_BLUEPRINT_OBJECT_ID" 2>/dev/null; then
+    if az ad app delete --id "$OPENCLAW_BLUEPRINT_OBJECT_ID"; then
         echo -e "  ${GREEN}✅ Deleted Blueprint app registration ($OPENCLAW_BLUEPRINT_APP_ID)${NC}"
     else
         echo -e "  ${YELLOW}⚠️  Blueprint not found — may already be deleted${NC}"
@@ -48,7 +48,7 @@ if [ -n "${OPENCLAW_BLUEPRINT_OBJECT_ID:-}" ]; then
 elif [ -n "${OPENCLAW_BLUEPRINT_APP_ID:-}" ]; then
     OBJECT_ID=$(az ad app list \
         --filter "appId eq '${OPENCLAW_BLUEPRINT_APP_ID}'" \
-        --query "[0].id" -o tsv 2>/dev/null)
+        --query "[0].id" -o tsv)
     if [ -n "$OBJECT_ID" ]; then
         az ad app delete --id "$OBJECT_ID"
         echo -e "  ${GREEN}✅ Deleted Blueprint app registration ($OPENCLAW_BLUEPRINT_APP_ID)${NC}"
@@ -64,9 +64,9 @@ fi
 # Check both the old and new provisioner app names
 for PROV_NAME in "Openclaw Provisioner" "Openclaw Agent ID Provisioner"; do
     PROV_OBJ=$(az ad app list --display-name "$PROV_NAME" \
-        --query "[0].id" -o tsv 2>/dev/null || echo "")
+        --query "[0].id" -o tsv || echo "")
     if [ -n "$PROV_OBJ" ]; then
-        az ad app delete --id "$PROV_OBJ" 2>/dev/null && \
+        az ad app delete --id "$PROV_OBJ" && \
             echo -e "  ${GREEN}✅ Deleted Provisioner app registration ($PROV_NAME)${NC}" || \
             echo -e "  ${YELLOW}⚠️  Could not delete Provisioner app ($PROV_NAME)${NC}"
     fi
@@ -87,7 +87,7 @@ if cleared:
     print(f'  ✅ Cleared cached credentials: {\", \".join(cleared)}')
 else:
     print('  ⚠️  No cached credentials found (or keyring unavailable)')
-" 2>/dev/null || echo -e "  ${YELLOW}⚠️  Could not clear credential store${NC}"
+" || echo -e "  ${YELLOW}⚠️  Could not clear credential store${NC}"
 
 # ── Remove .env ─────────────────────────────────────────────────────────────
 

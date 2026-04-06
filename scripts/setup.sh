@@ -84,7 +84,7 @@ PYTHON=""
 for candidate in python3.12 python3.13 python3; do
     if command -v "$candidate" &>/dev/null; then
         PY_VER=$("$candidate" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        if [ "$(echo "$PY_VER >= 3.12" | bc 2>/dev/null || python3 -c "print(int($PY_VER >= 3.12))")" = "1" ]; then
+        if [ "$(echo "$PY_VER >= 3.12" | bc || python3 -c "print(int($PY_VER >= 3.12))")" = "1" ]; then
             PYTHON="$candidate"
             break
         fi
@@ -109,7 +109,7 @@ if [ ${#MISSING[@]} -gt 0 ]; then
     fail "Install the missing prerequisites above and re-run."
 fi
 
-success "az CLI found ($(az version --query '\"azure-cli\"' -o tsv 2>/dev/null || echo '?'))"
+success "az CLI found ($(az version --query '\"azure-cli\"' -o tsv || echo '?'))"
 success "$PYTHON found ($PY_VER)"
 success "git found ($(git --version | awk '{print $3}'))"
 success "curl found"
@@ -135,8 +135,8 @@ success "Tenant:       $TENANT_ID"
 # ════════════════════════════════════════════════════════════════════════════
 step 3 "Getting signed-in user identity"
 
-HUMAN_UPN=$(az account show --query "user.name" -o tsv 2>/dev/null || echo "")
-HUMAN_USER_ID=$(az ad signed-in-user show --query "id" -o tsv 2>/dev/null || echo "")
+HUMAN_UPN=$(az account show --query "user.name" -o tsv || echo "")
+HUMAN_USER_ID=$(az ad signed-in-user show --query "id" -o tsv || echo "")
 
 if [ -z "$HUMAN_USER_ID" ]; then
     fail "Could not determine signed-in user ID. Ensure 'az login' is done with a user account."
@@ -151,7 +151,7 @@ step 4 "Creating/finding Provisioner app registration"
 
 # A dedicated app for Agent ID provisioning — Azure CLI tokens include
 # Directory.AccessAsUser.All which the Agent Identity APIs REJECT (403).
-EXISTING_PROV=$(az ad app list --display-name "$PROVISIONER_APP_NAME" --query "[0].appId" -o tsv 2>/dev/null || echo "")
+EXISTING_PROV=$(az ad app list --display-name "$PROVISIONER_APP_NAME" --query "[0].appId" -o tsv || echo "")
 if [ -n "$EXISTING_PROV" ]; then
     success "Found existing provisioner app: $EXISTING_PROV"
     PROV_CLIENT_ID="$EXISTING_PROV"
@@ -172,11 +172,11 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 step 5 "Ensuring provisioner service principal"
 
-EXISTING_PROV_SP=$(az ad sp list --filter "appId eq '$PROV_CLIENT_ID'" --query "[0].id" -o tsv 2>/dev/null || echo "")
+EXISTING_PROV_SP=$(az ad sp list --filter "appId eq '$PROV_CLIENT_ID'" --query "[0].id" -o tsv || echo "")
 if [ -n "$EXISTING_PROV_SP" ]; then
     success "Provisioner SP already exists ($EXISTING_PROV_SP)"
 else
-    az ad sp create --id "$PROV_CLIENT_ID" -o none 2>/dev/null || true
+    az ad sp create --id "$PROV_CLIENT_ID" -o none || true
     success "Provisioner service principal created"
 fi
 
@@ -187,7 +187,7 @@ step 6 "Discovering Agent Identity permissions from Microsoft Graph"
 
 # Discover all 18 Agent Identity permissions from the Graph service principal
 AGENT_PERM_IDS=$(az ad sp show --id "$GRAPH_API_ID" \
-    --query "appRoles[?contains(value, 'AgentIdentity')].id" -o tsv 2>/dev/null || echo "")
+    --query "appRoles[?contains(value, 'AgentIdentity')].id" -o tsv || echo "")
 
 AGENT_PERM_COUNT=0
 if [ -n "$AGENT_PERM_IDS" ]; then
@@ -213,7 +213,7 @@ PERM_SPECS+=("${APP_READWRITE_ALL_ID}=Role")
 echo "  Adding ${#PERM_SPECS[@]} application permissions..."
 az ad app permission add --id "$PROV_CLIENT_ID" \
     --api "$GRAPH_API_ID" \
-    --api-permissions "${PERM_SPECS[@]}" 2>/dev/null || true
+    --api-permissions "${PERM_SPECS[@]}" || true
 
 success "Application permissions configured (${#PERM_SPECS[@]} total)"
 
@@ -227,7 +227,7 @@ for attempt in 1 2 3 4; do
     WAIT=$((10 * attempt))
     echo "  Waiting ${WAIT}s before consent attempt $attempt/4..."
     sleep "$WAIT"
-    if az ad app permission admin-consent --id "$PROV_CLIENT_ID" 2>/dev/null; then
+    if az ad app permission admin-consent --id "$PROV_CLIENT_ID"; then
         CONSENT_GRANTED=true
         break
     else
@@ -259,15 +259,15 @@ echo "  Creating new client secret on provisioner app..."
 PROV_CRED_JSON=$(az ad app credential reset \
     --id "$PROV_CLIENT_ID" \
     --display-name "Openclaw Setup" \
-    -o json 2>/dev/null)
+    -o json)
 
-PROV_SECRET=$("$PYTHON" -c "import sys,json; print(json.loads('''$PROV_CRED_JSON''')['password'])" 2>/dev/null)
+PROV_SECRET=$("$PYTHON" -c "import sys,json; print(json.loads('''$PROV_CRED_JSON''')['password'])")
 if [ -z "$PROV_SECRET" ]; then
     # Fallback: try extracting with --query
     PROV_SECRET=$(az ad app credential reset \
         --id "$PROV_CLIENT_ID" \
         --display-name "Openclaw Setup Retry" \
-        --query "password" -o tsv 2>/dev/null)
+        --query "password" -o tsv)
 fi
 
 if [ -z "$PROV_SECRET" ]; then
@@ -283,10 +283,10 @@ step 11 "Acquiring provisioner token via ClientSecretCredential"
 # Ensure azure-identity is available — install in project venv if it exists, else system
 if [ -d "$PROJECT_ROOT/.venv" ]; then
     VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python3"
-    "$VENV_PYTHON" -m pip install --quiet azure-identity 2>/dev/null || true
+    "$VENV_PYTHON" -m pip install --quiet azure-identity || true
     TOKEN_PYTHON="$VENV_PYTHON"
 else
-    "$PYTHON" -m pip install --quiet azure-identity 2>/dev/null || true
+    "$PYTHON" -m pip install --quiet azure-identity || true
     TOKEN_PYTHON="$PYTHON"
 fi
 
@@ -324,13 +324,13 @@ import sys, json
 data = json.load(sys.stdin)
 values = data.get('value', [])
 print(values[0]['appId'] if values else '')
-" 2>/dev/null) || true
+") || true
     BLUEPRINT_OBJECT_ID=$(echo "$BP_BODY" | "$PYTHON" -c "
 import sys, json
 data = json.load(sys.stdin)
 values = data.get('value', [])
 print(values[0]['id'] if values else '')
-" 2>/dev/null) || true
+") || true
 fi
 
 if [ -n "$BLUEPRINT_APP_ID" ]; then
@@ -377,7 +377,7 @@ import sys, json
 data = json.load(sys.stdin)
 values = data.get('value', [])
 print(values[0]['id'] if values else '')
-" 2>/dev/null) || true
+") || true
 fi
 
 if [ -n "$EXISTING_BP_SP" ]; then
@@ -433,7 +433,7 @@ import sys, json
 data = json.load(sys.stdin)
 uris = data.get('identifierUris', [])
 print(uris[0] if uris else '')
-" 2>/dev/null) || true
+") || true
 fi
 
 if [ -n "$CURRENT_URI" ]; then
@@ -471,7 +471,7 @@ for s in scopes:
     if s.get('value') == 'access_as_user':
         print(s['id'])
         break
-" 2>/dev/null) || true
+") || true
 fi
 
 if [ -n "$EXISTING_SCOPE" ]; then
@@ -517,7 +517,7 @@ az ad app permission add --id "$BLUEPRINT_APP_ID" \
         e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope \
         9ff7295e-131b-4d94-90e1-69fde507ac11=Scope \
         116b7235-7cc6-461e-b163-8e55691d839e=Scope \
-        7427e0e9-2fba-42fe-b0c0-848c9e6a8182=Scope 2>/dev/null || true
+        7427e0e9-2fba-42fe-b0c0-848c9e6a8182=Scope || true
 
 success "Delegated permissions: User.Read, Chat.Create, ChatMessage.Send, Chat.ReadWrite"
 
@@ -531,7 +531,7 @@ for attempt in 1 2 3 4; do
     WAIT=$((10 * attempt))
     echo "  Waiting ${WAIT}s before consent attempt $attempt/4..."
     sleep "$WAIT"
-    if az ad app permission admin-consent --id "$BLUEPRINT_APP_ID" 2>/dev/null; then
+    if az ad app permission admin-consent --id "$BLUEPRINT_APP_ID"; then
         BP_CONSENT_GRANTED=true
         break
     else
@@ -556,7 +556,7 @@ CACHED_SECRET=$("$PYTHON" -c "
 import keyring
 s = keyring.get_password('openclaw', 'blueprint_secret')
 print(s or '')
-" 2>/dev/null) || true
+") || true
 
 if [ -n "$CACHED_SECRET" ]; then
     success "Using cached blueprint secret from credential store"
@@ -566,13 +566,13 @@ else
     BP_CRED_JSON=$(az ad app credential reset \
         --id "$BLUEPRINT_OBJECT_ID" \
         --display-name "Openclaw Device" \
-        -o json 2>/dev/null)
-    BLUEPRINT_SECRET=$("$PYTHON" -c "import sys,json; print(json.loads('''$BP_CRED_JSON''')['password'])" 2>/dev/null)
+        -o json)
+    BLUEPRINT_SECRET=$("$PYTHON" -c "import sys,json; print(json.loads('''$BP_CRED_JSON''')['password'])")
     if [ -z "$BLUEPRINT_SECRET" ]; then
         BLUEPRINT_SECRET=$(az ad app credential reset \
             --id "$BLUEPRINT_OBJECT_ID" \
             --display-name "Openclaw Device Retry" \
-            --query "password" -o tsv 2>/dev/null)
+            --query "password" -o tsv)
     fi
 
     if [ -z "$BLUEPRINT_SECRET" ]; then
@@ -583,7 +583,7 @@ else
     if "$PYTHON" -c "
 import keyring, sys
 keyring.set_password('openclaw', 'blueprint_secret', sys.argv[1])
-" "$BLUEPRINT_SECRET" 2>/dev/null; then
+" "$BLUEPRINT_SECRET"; then
         success "Blueprint secret created and cached in credential store"
     else
         warn "Blueprint secret created but could not cache in credential store"
@@ -596,7 +596,7 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 step 19 "Creating/finding Agent Identity"
 
-HOSTNAME_SHORT=$(hostname -s 2>/dev/null || hostname)
+HOSTNAME_SHORT=$(hostname -s || hostname)
 AGENT_DISPLAY_NAME="Openclaw Agent - $HOSTNAME_SHORT"
 
 # Check for existing agent identity using provisioner token
@@ -613,13 +613,13 @@ import sys, json
 data = json.load(sys.stdin)
 values = data.get('value', [])
 print(values[0].get('appId', '') if values else '')
-" 2>/dev/null) || true
+") || true
     AGENT_OBJECT_ID=$(echo "$AGENT_SEARCH_BODY" | "$PYTHON" -c "
 import sys, json
 data = json.load(sys.stdin)
 values = data.get('value', [])
 print(values[0].get('id', '') if values else '')
-" 2>/dev/null) || true
+") || true
 fi
 
 if [ -n "$AGENT_ID" ]; then
@@ -673,7 +673,7 @@ EXISTING_RT=$("$PYTHON" -c "
 import keyring
 t = keyring.get_password('openclaw', 'human_refresh_token')
 print('yes' if t else '')
-" 2>/dev/null) || true
+") || true
 
 if [ -n "$EXISTING_RT" ]; then
     success "Human refresh token already cached in keychain"
@@ -761,7 +761,7 @@ chmod 600 .env
 success ".env file created (chmod 600)"
 
 # Verify .gitignore covers .env
-if grep -qx '\.env' .gitignore 2>/dev/null || grep -q '^\.env$' .gitignore 2>/dev/null; then
+if grep -qx '\.env' .gitignore || grep -q '^\.env$' .gitignore; then
     success ".env is listed in .gitignore"
 else
     warn ".env may not be in .gitignore — verify before committing"
