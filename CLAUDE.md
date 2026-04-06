@@ -4,13 +4,12 @@
 
 ## Non-Negotiables
 
+- **TDD: write tests first, then implementation** — no new module or function ships without a failing test that preceded it. `pytest -v && ruff check .` must pass before every commit
 - Security paths fail closed — if audit can't record, the action doesn't proceed
 - Every agent resource access must be attributed to an Agent ID, never the human user
 - Secrets and tokens never appear in logs — use `__repr__` overrides on sensitive fields
-- Test before committing — `pytest -v && ruff check .`
-- Token flows are separated by type — never mix OBO, device-code, and client-credentials logic
 - Never redirect stderr to /dev/null — errors must always be visible for debugging
-- Check every MSAL result for `"error"` key before accessing `"access_token"` — MSAL returns dicts, not exceptions
+- Check every token response for `"error"` key before accessing `"access_token"` — Entra returns error dicts, not exceptions
 - Never use `az rest` or Azure CLI tokens for Agent Identity APIs — they include `Directory.AccessAsUser.All` which causes hard 403
 - Always create BlueprintPrincipal explicitly after Blueprint — it is NOT auto-created
 - Agent IDs are service principals, not users — never create fake user accounts with passwords
@@ -19,9 +18,9 @@
 ## Current Runtime Model
 
 - Python 3.12+ research project — no deployed service yet
-- Four modules: `platform/` (OS shim) → `auth/` (OBO/Agent ID) → `audit/` (tracking) → `teams/` (Agent User)
+- Four modules: `platform/` (OS shim) → `auth/` (Agent ID) → `audit/` (tracking) → `teams/` (Agent User)
 - External dependencies: Microsoft Entra ID (identity), Microsoft Teams (communication via Graph API)
-- Auth via `msal` library — OBO token exchange is the core flow
+- Auth via three-hop Agent User flow: Blueprint → Agent Identity → Agent User (`httpx` direct, no MSAL at runtime)
 - All structured data uses `dataclasses` or `pydantic` — no raw dicts
 
 ## Read These First
@@ -39,11 +38,14 @@
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Test + lint
-pytest -v && ruff check .
+# Test + lint (run before every commit)
+pytest -v --tb=short && ruff check .
+
+# Test with coverage
+pytest -v --cov=openclaw --cov-report=term-missing --cov-fail-under=80
 
 # Single test
-pytest tests/auth/test_obo.py::test_token_exchange -v
+pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v
 
 # Format
 ruff format .
@@ -55,7 +57,7 @@ pip install mkdocs-material && mkdocs serve
 ## High-Value Repo Areas
 
 - `src/openclaw/platform/`: OS-specific agent identity — `AgentIdentityProvider` protocol with Mac/Linux/Windows implementations
-- `src/openclaw/auth/`: OBO token exchange, Agent ID registration, consent — one module per flow type
+- `src/openclaw/auth/`: Agent ID registration, token exchange — one module per flow type
 - `src/openclaw/audit/`: Audit-first enforcement — events emitted before actions execute
 - `src/openclaw/teams/`: Bidirectional Teams communication via Graph API
 - `docs/decisions/`: ADRs — every significant architectural choice is recorded here

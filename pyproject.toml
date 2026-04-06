@@ -20,6 +20,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0",
     "ruff>=0.4",
     "respx>=0.22.0",
     "azure-identity>=1.15.0",
@@ -36,6 +37,25 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["openclaw"]
+omit = [
+    "src/openclaw/mcp_server.py",
+    "src/openclaw/logging_config.py",
+    "src/openclaw/platform/mac.py",
+    "src/openclaw/platform/linux.py",
+    "src/openclaw/platform/windows.py",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "if TYPE_CHECKING:",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
