@@ -318,15 +318,27 @@ def create_agent_identity(token: str, blueprint_app_id: str) -> tuple[str, str]:
 MS_GRAPH_API_APP_ID = "00000003-0000-0000-c000-000000000000"
 
 
-def _agent_user_upn(tenant_id: str) -> str:
-    """Generate the UPN for the Agent User."""
-    # Use the onmicrosoft.com domain from tenant
+def _agent_user_upn() -> str:
+    """Generate the UPN for the Agent User.
+
+    Extracts the domain from the signed-in user's UPN (e.g., admin@werner.ac → werner.ac).
+    This guarantees the domain is a verified domain in the tenant.
+    """
     from entra_provisioning import run_az
 
     rc, out, _ = run_az([
-        "account", "show", "--query", "tenantDefaultDomain", "-o", "tsv",
+        "ad", "signed-in-user", "show", "--query", "userPrincipalName", "-o", "tsv",
     ])
-    domain = out if rc == 0 and out else f"{tenant_id}.onmicrosoft.com"
+    if rc == 0 and out and "@" in out:
+        domain = out.split("@", 1)[1]
+    else:
+        # Fallback: query tenant verified domains via az CLI
+        rc, out, _ = run_az([
+            "rest", "--method", "GET",
+            "--url", "https://graph.microsoft.com/v1.0/domains?$select=id,isDefault",
+            "--query", "value[?isDefault].id | [0]", "-o", "tsv",
+        ])
+        domain = out if rc == 0 and out else "unknown.onmicrosoft.com"
     return f"openclaw-agent@{domain}"
 
 
@@ -369,7 +381,6 @@ def find_existing_agent_user(token: str, agent_identity_obj_id: str) -> dict | N
 def create_agent_user(
     token: str,
     agent_identity_obj_id: str,
-    tenant_id: str,
 ) -> tuple[str, str]:
     """Create or find the Agent User. Returns (user_object_id, user_upn)."""
     print("\n--- Creating Agent User ---\n")
@@ -383,7 +394,7 @@ def create_agent_user(
         set_state("AGENT_USER_UPN", upn)
         return user_id, upn
 
-    upn = _agent_user_upn(tenant_id)
+    upn = _agent_user_upn()
     body = {
         "@odata.type": "microsoft.graph.agentUser",
         "displayName": "Openclaw Agent",
@@ -488,12 +499,9 @@ def main() -> int:
         print(f"ERROR: {exc}")
         return 1
 
-    # Read tenant ID from state (set by entra_provisioning.py)
-    tenant_id = get_state("TENANT_ID") or ""
-
     blueprint_app_id, blueprint_obj_id = create_blueprint(token)
     agent_id, agent_obj_id = create_agent_identity(token, blueprint_app_id)
-    agent_user_id, agent_user_upn = create_agent_user(token, agent_obj_id, tenant_id)
+    agent_user_id, agent_user_upn = create_agent_user(token, agent_obj_id)
     grant_agent_user_consent(token, agent_obj_id, agent_user_id)
 
     print("\n--- Summary ---\n")
