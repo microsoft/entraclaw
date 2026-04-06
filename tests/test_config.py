@@ -16,6 +16,8 @@ class TestOpenclawConfig:
         assert cfg.blueprint_secret is None
         assert cfg.agent_id is None
         assert cfg.agent_object_id is None
+        assert cfg.agent_user_id is None
+        assert cfg.agent_user_upn is None
         assert cfg.human_user_id is None
         assert cfg.human_upn is None
         assert cfg.log_level == "INFO"
@@ -31,6 +33,8 @@ class TestOpenclawConfig:
             "OPENCLAW_BLUEPRINT_SECRET": "my-secret",
             "OPENCLAW_AGENT_ID": "my-agent-id",
             "OPENCLAW_AGENT_OBJECT_ID": "my-agent-obj",
+            "OPENCLAW_AGENT_USER_ID": "my-agent-user",
+            "OPENCLAW_AGENT_USER_UPN": "agent@tenant.onmicrosoft.com",
             "OPENCLAW_HUMAN_USER_ID": "human-uid",
             "OPENCLAW_HUMAN_UPN": "human@example.com",
             "OPENCLAW_LOG_LEVEL": "DEBUG",
@@ -46,6 +50,8 @@ class TestOpenclawConfig:
         assert cfg.blueprint_secret == "my-secret"
         assert cfg.agent_id == "my-agent-id"
         assert cfg.agent_object_id == "my-agent-obj"
+        assert cfg.agent_user_id == "my-agent-user"
+        assert cfg.agent_user_upn == "agent@tenant.onmicrosoft.com"
         assert cfg.human_user_id == "human-uid"
         assert cfg.human_upn == "human@example.com"
         assert cfg.log_level == "DEBUG"

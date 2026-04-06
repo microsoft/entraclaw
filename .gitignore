@@ -16,3 +16,4 @@ venv/
 .ruff_cache/
 .mypy_cache/
 .pyright/
+.openclaw-state.json

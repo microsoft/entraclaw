@@ -1,15 +1,15 @@
-"""Tests for Teams tools — httpx fully mocked with respx, MSAL mocked.
+"""Tests for Teams tools — httpx fully mocked with respx.
 
-Token acquisition uses the OBO (On-Behalf-Of) flow:
-  1. Retrieve human's refresh token from the OS keychain
-  2. Exchange it for a human access token
-  3. OBO exchange: human token → agent-attributed token
+Token acquisition uses the three-hop Agent User flow:
+  1. Blueprint token via client_credentials
+  2. Agent Identity token via FIC exchange (Blueprint token as assertion)
+  3. Agent User token via user_fic grant
 """
 
 from __future__ import annotations
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -19,145 +19,150 @@ from openclaw.errors import (
     AgentIDNotAvailable,
     ChatNotFound,
     MessageTooLong,
-    OBOExchangeError,
     RateLimitError,
     TeamsNotLicensed,
+    TokenExchangeError,
     TokenExpiredError,
 )
 from openclaw.tools.teams import (
     GRAPH_BASE,
     MAX_MESSAGE_LENGTH,
-    acquire_agent_token,
+    TOKEN_ENDPOINT,
+    acquire_agent_user_token,
     create_or_find_chat,
     read,
     send,
 )
 
 # ---------------------------------------------------------------------------
-# acquire_agent_token (OBO flow)
+# acquire_agent_user_token (three-hop flow)
 # ---------------------------------------------------------------------------
 
+FULL_ENV = {
+    "OPENCLAW_BLUEPRINT_APP_ID": "bp-id",
+    "OPENCLAW_BLUEPRINT_SECRET": "bp-secret",
+    "OPENCLAW_TENANT_ID": "tid",
+    "OPENCLAW_AGENT_ID": "agent-id",
+    "OPENCLAW_AGENT_USER_ID": "agent-user-oid",
+}
 
-class TestAcquireAgentToken:
+TOKEN_URL = TOKEN_ENDPOINT.format(tenant="tid")
+
+
+class TestAcquireAgentUserToken:
     def test_missing_config_raises(self) -> None:
         cleaned = {k: v for k, v in os.environ.items() if not k.startswith("OPENCLAW_")}
         with (
             patch.dict(os.environ, cleaned, clear=True),
             pytest.raises(AgentIDNotAvailable),
         ):
-            acquire_agent_token(__import__("openclaw.config", fromlist=["get_config"]).get_config())
+            from openclaw.config import get_config
 
-    def test_missing_refresh_token_raises(self) -> None:
-        env = {
-            "OPENCLAW_BLUEPRINT_APP_ID": "bp-id",
-            "OPENCLAW_TENANT_ID": "tid",
-            "OPENCLAW_BLUEPRINT_SECRET": "secret",
-        }
-        mock_store = MagicMock()
-        mock_store.retrieve.return_value = None
+            acquire_agent_user_token(get_config())
+
+    def test_missing_agent_user_id_raises(self) -> None:
+        env = {k: v for k, v in FULL_ENV.items() if k != "OPENCLAW_AGENT_USER_ID"}
+        # Clear all OPENCLAW_ vars to avoid interference, then set only ours
+        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("OPENCLAW_")}
+        cleaned.update(env)
         with (
-            patch.dict(os.environ, env, clear=False),
-            patch("openclaw.platform.get_credential_store", return_value=mock_store),
-            pytest.raises(AgentIDNotAvailable, match="refresh token"),
+            patch.dict(os.environ, cleaned, clear=True),
+            pytest.raises(AgentIDNotAvailable),
         ):
             from openclaw.config import get_config
 
-            acquire_agent_token(get_config())
+            acquire_agent_user_token(get_config())
 
-    def test_obo_error_raised(self) -> None:
-        env = {
-            "OPENCLAW_BLUEPRINT_APP_ID": "bp-id",
-            "OPENCLAW_TENANT_ID": "tid",
-            "OPENCLAW_BLUEPRINT_SECRET": "secret",
-        }
-        mock_store = MagicMock()
-        mock_store.retrieve.return_value = "cached-refresh-token"
-
-        mock_public_app = MagicMock()
-        mock_public_app.get_accounts.return_value = []
-        mock_public_app.acquire_token_by_refresh_token.return_value = {
-            "access_token": "human-token",
-        }
-
-        mock_conf_app = MagicMock()
-        mock_conf_app.acquire_token_on_behalf_of.return_value = {
-            "error": "interaction_required",
-            "error_description": "Consent needed",
-        }
-
+    @respx.mock
+    def test_hop1_failure_raises(self) -> None:
+        respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json={
+            "error": "invalid_client",
+            "error_description": "Bad secret",
+        }))
         with (
-            patch.dict(os.environ, env, clear=False),
-            patch("openclaw.platform.get_credential_store", return_value=mock_store),
-            patch("openclaw.tools.teams.PublicClientApplication", return_value=mock_public_app),
-            patch(
-                "openclaw.tools.teams.ConfidentialClientApplication",
-                return_value=mock_conf_app,
-            ),
-            pytest.raises(OBOExchangeError, match="interaction_required"),
+            patch.dict(os.environ, FULL_ENV, clear=False),
+            pytest.raises(TokenExchangeError, match="hop1:blueprint"),
         ):
             from openclaw.config import get_config
 
-            acquire_agent_token(get_config())
+            acquire_agent_user_token(get_config())
 
+    @respx.mock
+    def test_hop2_failure_raises(self) -> None:
+        # Hop 1 succeeds
+        respx.post(TOKEN_URL).mock(side_effect=[
+            httpx.Response(200, json={"access_token": "bp-token"}),
+            httpx.Response(200, json={
+                "error": "invalid_grant",
+                "error_description": "FIC not configured",
+            }),
+        ])
+        with (
+            patch.dict(os.environ, FULL_ENV, clear=False),
+            pytest.raises(TokenExchangeError, match="hop2:agent_identity"),
+        ):
+            from openclaw.config import get_config
+
+            acquire_agent_user_token(get_config())
+
+    @respx.mock
+    def test_hop3_failure_raises(self) -> None:
+        respx.post(TOKEN_URL).mock(side_effect=[
+            httpx.Response(200, json={"access_token": "bp-token"}),
+            httpx.Response(200, json={"access_token": "agent-id-token"}),
+            httpx.Response(200, json={
+                "error": "invalid_grant",
+                "error_description": "Agent User not found",
+            }),
+        ])
+        with (
+            patch.dict(os.environ, FULL_ENV, clear=False),
+            pytest.raises(TokenExchangeError, match="hop3:agent_user"),
+        ):
+            from openclaw.config import get_config
+
+            acquire_agent_user_token(get_config())
+
+    @respx.mock
     def test_success(self) -> None:
-        env = {
-            "OPENCLAW_BLUEPRINT_APP_ID": "bp-id",
-            "OPENCLAW_TENANT_ID": "tid",
-            "OPENCLAW_BLUEPRINT_SECRET": "secret",
-        }
-        mock_store = MagicMock()
-        mock_store.retrieve.return_value = "cached-refresh-token"
-
-        mock_public_app = MagicMock()
-        mock_public_app.get_accounts.return_value = []
-        mock_public_app.acquire_token_by_refresh_token.return_value = {
-            "access_token": "human-token",
-        }
-
-        mock_conf_app = MagicMock()
-        mock_conf_app.acquire_token_on_behalf_of.return_value = {
-            "access_token": "agent-obo-token-123",
-        }
-
-        with (
-            patch.dict(os.environ, env, clear=False),
-            patch("openclaw.platform.get_credential_store", return_value=mock_store),
-            patch("openclaw.tools.teams.PublicClientApplication", return_value=mock_public_app),
-            patch(
-                "openclaw.tools.teams.ConfidentialClientApplication",
-                return_value=mock_conf_app,
-            ),
-        ):
+        respx.post(TOKEN_URL).mock(side_effect=[
+            httpx.Response(200, json={"access_token": "bp-token"}),
+            httpx.Response(200, json={"access_token": "agent-id-token"}),
+            httpx.Response(200, json={"access_token": "agent-user-token-123"}),
+        ])
+        with patch.dict(os.environ, FULL_ENV, clear=False):
             from openclaw.config import get_config
 
-            token = acquire_agent_token(get_config())
-        assert token == "agent-obo-token-123"
+            token = acquire_agent_user_token(get_config())
+        assert token == "agent-user-token-123"
 
-    def test_human_token_failure_raises_msal_error(self) -> None:
-        env = {
-            "OPENCLAW_BLUEPRINT_APP_ID": "bp-id",
-            "OPENCLAW_TENANT_ID": "tid",
-            "OPENCLAW_BLUEPRINT_SECRET": "secret",
-        }
-        mock_store = MagicMock()
-        mock_store.retrieve.return_value = "cached-refresh-token"
-
-        mock_public_app = MagicMock()
-        mock_public_app.get_accounts.return_value = []
-        mock_public_app.acquire_token_by_refresh_token.return_value = {
-            "error": "invalid_grant",
-            "error_description": "Refresh token expired",
-        }
-
-        with (
-            patch.dict(os.environ, env, clear=False),
-            patch("openclaw.platform.get_credential_store", return_value=mock_store),
-            patch("openclaw.tools.teams.PublicClientApplication", return_value=mock_public_app),
-            pytest.raises(Exception, match="invalid_grant"),
-        ):
+    @respx.mock
+    def test_correct_hop_payloads(self) -> None:
+        """Verify each hop sends the right grant_type and parameters."""
+        route = respx.post(TOKEN_URL).mock(side_effect=[
+            httpx.Response(200, json={"access_token": "bp-token"}),
+            httpx.Response(200, json={"access_token": "agent-id-token"}),
+            httpx.Response(200, json={"access_token": "final-token"}),
+        ])
+        with patch.dict(os.environ, FULL_ENV, clear=False):
             from openclaw.config import get_config
 
-            acquire_agent_token(get_config())
+            acquire_agent_user_token(get_config())
+
+        # Hop 1: client_credentials
+        hop1_body = dict(x.split("=") for x in route.calls[0].request.content.decode().split("&"))
+        assert hop1_body["grant_type"] == "client_credentials"
+        assert hop1_body["client_id"] == "bp-id"
+
+        # Hop 2: client_credentials with assertion
+        hop2_body = dict(x.split("=") for x in route.calls[1].request.content.decode().split("&"))
+        assert hop2_body["grant_type"] == "client_credentials"
+        assert hop2_body["client_id"] == "agent-id"
+
+        # Hop 3: user_fic
+        hop3_body = dict(x.split("=") for x in route.calls[2].request.content.decode().split("&"))
+        assert hop3_body["grant_type"] == "user_fic"
+        assert hop3_body["user_id"] == "agent-user-oid"
 
 
 # ---------------------------------------------------------------------------

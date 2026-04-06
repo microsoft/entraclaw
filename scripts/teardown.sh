@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Openclaw Identity Research — teardown
-# Removes the Agent Identity (SP), Blueprint (app), cached credentials, and .env.
+# Removes everything setup.sh creates:
+#   1. Agent User (must go first — child of Agent Identity)
+#   2. Agent Identity (service principal)
+#   3. Blueprint (app registration — also deletes BlueprintPrincipal)
+#   4. Provisioner app registration
+#   5. Local state (.env, .openclaw-state.json, legacy keychain)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,11 +17,75 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# Load existing config (non-fatal if missing)
-# shellcheck disable=SC1091
-source .env || true
+# ── Load IDs from all available sources ────────────────────────────────────
 
-echo -e "${YELLOW}⚠️  This will delete the Openclaw Agent Identity, Blueprint, and all cached credentials.${NC}"
+# Helper to read from state file (always available)
+_read_state() {
+    local key="$1"
+    if [ -f .openclaw-state.json ] && command -v python3 &>/dev/null; then
+        python3 -c "
+import json, pathlib
+data = json.loads(pathlib.Path('.openclaw-state.json').read_text())
+print(data.get('$key', ''))
+" 2>/dev/null || echo ""
+    else
+        echo ""
+    fi
+}
+
+# Load from .env (non-fatal if missing)
+# shellcheck disable=SC1091
+source .env 2>/dev/null || true
+
+# Merge state file values (state file takes precedence for new-format IDs)
+AGENT_USER_ID="${OPENCLAW_AGENT_USER_ID:-$(_read_state AGENT_USER_ID)}"
+AGENT_OBJECT_ID="${OPENCLAW_AGENT_OBJECT_ID:-$(_read_state AGENT_OBJECT_ID)}"
+BLUEPRINT_APP_ID="${OPENCLAW_BLUEPRINT_APP_ID:-$(_read_state BLUEPRINT_APP_ID)}"
+BLUEPRINT_OBJECT_ID="${OPENCLAW_BLUEPRINT_OBJECT_ID:-$(_read_state BLUEPRINT_OBJECT_ID)}"
+
+# Check if there's anything to do
+HAS_ENTRA_RESOURCES=false
+HAS_LOCAL_STATE=false
+
+if [ -n "$AGENT_USER_ID" ] || [ -n "$AGENT_OBJECT_ID" ] || [ -n "$BLUEPRINT_APP_ID" ]; then
+    HAS_ENTRA_RESOURCES=true
+fi
+if [ -f .env ] || [ -f .openclaw-state.json ]; then
+    HAS_LOCAL_STATE=true
+fi
+
+# Check for provisioner apps in Entra (only if logged in)
+PROV_FOUND=false
+if az account show &>/dev/null; then
+    for PROV_NAME in "Openclaw Provisioner" "Openclaw Agent ID Provisioner"; do
+        PROV_CHECK=$(az ad app list --display-name "$PROV_NAME" --query "[0].id" -o tsv 2>/dev/null) || true
+        if [ -n "$PROV_CHECK" ]; then
+            PROV_FOUND=true
+            HAS_ENTRA_RESOURCES=true
+        fi
+    done
+fi
+
+if [ "$HAS_ENTRA_RESOURCES" = false ] && [ "$HAS_LOCAL_STATE" = false ]; then
+    echo -e "${GREEN}Nothing to clean up.${NC} No Entra resources or local state found."
+    exit 0
+fi
+
+echo -e "${YELLOW}⚠️  This will delete the following:${NC}"
+echo ""
+if [ "$HAS_ENTRA_RESOURCES" = true ]; then
+    echo "  Entra resources:"
+    [ -n "$AGENT_USER_ID" ]    && echo "    Agent User:     $AGENT_USER_ID"
+    [ -n "$AGENT_OBJECT_ID" ]  && echo "    Agent Identity: $AGENT_OBJECT_ID"
+    [ -n "$BLUEPRINT_APP_ID" ] && echo "    Blueprint:      $BLUEPRINT_APP_ID"
+    [ "$PROV_FOUND" = true ]   && echo "    Provisioner:    (found by name)"
+fi
+if [ "$HAS_LOCAL_STATE" = true ]; then
+    echo "  Local state:"
+    [ -f .env ]                  && echo "    .env"
+    [ -f .openclaw-state.json ]  && echo "    .openclaw-state.json"
+fi
+echo ""
 read -p "Are you sure? (y/N) " -n 1 -r
 echo
 
@@ -25,55 +94,73 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
-# ── Delete Agent Identity (service principal) ───────────────────────────────
+echo ""
 
-if [ -n "${OPENCLAW_AGENT_OBJECT_ID:-}" ]; then
-    if az ad sp delete --id "$OPENCLAW_AGENT_OBJECT_ID"; then
-        echo -e "  ${GREEN}✅ Deleted Agent Identity SP ($OPENCLAW_AGENT_OBJECT_ID)${NC}"
+# ── 1. Delete Agent User (child — must go before Agent Identity) ──────────
+
+if [ -n "$AGENT_USER_ID" ]; then
+    if az ad user delete --id "$AGENT_USER_ID" 2>/dev/null; then
+        echo -e "  ${GREEN}✅ Deleted Agent User ($AGENT_USER_ID)${NC}"
+    else
+        echo -e "  ${YELLOW}⚠️  Could not delete Agent User — may already be deleted${NC}"
+    fi
+else
+    echo -e "  ${YELLOW}⚠️  No Agent User ID found — skipping${NC}"
+fi
+
+# ── 2. Delete Agent Identity (service principal) ──────────────────────────
+
+if [ -n "$AGENT_OBJECT_ID" ]; then
+    if az ad sp delete --id "$AGENT_OBJECT_ID" 2>/dev/null; then
+        echo -e "  ${GREEN}✅ Deleted Agent Identity SP ($AGENT_OBJECT_ID)${NC}"
     else
         echo -e "  ${YELLOW}⚠️  Could not delete Agent Identity SP — may already be deleted${NC}"
     fi
 else
-    echo -e "  ${YELLOW}⚠️  No OPENCLAW_AGENT_OBJECT_ID in .env — skipping SP deletion${NC}"
+    echo -e "  ${YELLOW}⚠️  No Agent Identity object ID found — skipping${NC}"
 fi
 
-# ── Delete Blueprint (app registration) ─────────────────────────────────────
+# ── 3. Delete Blueprint (app registration + BlueprintPrincipal cascade) ───
 
-if [ -n "${OPENCLAW_BLUEPRINT_OBJECT_ID:-}" ]; then
-    if az ad app delete --id "$OPENCLAW_BLUEPRINT_OBJECT_ID"; then
-        echo -e "  ${GREEN}✅ Deleted Blueprint app registration ($OPENCLAW_BLUEPRINT_APP_ID)${NC}"
+if [ -n "$BLUEPRINT_OBJECT_ID" ]; then
+    if az ad app delete --id "$BLUEPRINT_OBJECT_ID" 2>/dev/null; then
+        echo -e "  ${GREEN}✅ Deleted Blueprint app registration ($BLUEPRINT_APP_ID)${NC}"
     else
-        echo -e "  ${YELLOW}⚠️  Blueprint not found — may already be deleted${NC}"
+        echo -e "  ${YELLOW}⚠️  Could not delete Blueprint — may already be deleted${NC}"
     fi
-elif [ -n "${OPENCLAW_BLUEPRINT_APP_ID:-}" ]; then
-    OBJECT_ID=$(az ad app list \
-        --filter "appId eq '${OPENCLAW_BLUEPRINT_APP_ID}'" \
-        --query "[0].id" -o tsv)
-    if [ -n "$OBJECT_ID" ]; then
-        az ad app delete --id "$OBJECT_ID"
-        echo -e "  ${GREEN}✅ Deleted Blueprint app registration ($OPENCLAW_BLUEPRINT_APP_ID)${NC}"
+elif [ -n "$BLUEPRINT_APP_ID" ]; then
+    # Fallback: look up object ID by app ID
+    OBJ_ID=$(az ad app list \
+        --filter "appId eq '${BLUEPRINT_APP_ID}'" \
+        --query "[0].id" -o tsv 2>/dev/null || echo "")
+    if [ -n "$OBJ_ID" ]; then
+        az ad app delete --id "$OBJ_ID" 2>/dev/null && \
+            echo -e "  ${GREEN}✅ Deleted Blueprint app registration ($BLUEPRINT_APP_ID)${NC}" || \
+            echo -e "  ${YELLOW}⚠️  Could not delete Blueprint${NC}"
     else
-        echo -e "  ${YELLOW}⚠️  Blueprint not found — may already be deleted${NC}"
+        echo -e "  ${YELLOW}⚠️  Blueprint not found in directory — may already be deleted${NC}"
     fi
 else
-    echo -e "  ${YELLOW}⚠️  No OPENCLAW_BLUEPRINT_APP_ID in .env — skipping app deletion${NC}"
+    echo -e "  ${YELLOW}⚠️  No Blueprint ID found — skipping${NC}"
 fi
 
-# ── Delete Provisioner app (if exists) ──────────────────────────────────────
+# ── 4. Delete Provisioner app (by display name — both old and new names) ──
 
-# Check both the old and new provisioner app names
 for PROV_NAME in "Openclaw Provisioner" "Openclaw Agent ID Provisioner"; do
     PROV_OBJ=$(az ad app list --display-name "$PROV_NAME" \
-        --query "[0].id" -o tsv || echo "")
+        --query "[0].id" -o tsv 2>/dev/null || echo "")
     if [ -n "$PROV_OBJ" ]; then
-        az ad app delete --id "$PROV_OBJ" && \
-            echo -e "  ${GREEN}✅ Deleted Provisioner app registration ($PROV_NAME)${NC}" || \
+        az ad app delete --id "$PROV_OBJ" 2>/dev/null && \
+            echo -e "  ${GREEN}✅ Deleted Provisioner app ($PROV_NAME)${NC}" || \
             echo -e "  ${YELLOW}⚠️  Could not delete Provisioner app ($PROV_NAME)${NC}"
     fi
 done
 
-# ── Clear cached credentials ────────────────────────────────────────────────
+# ── 5. Clean up local state ───────────────────────────────────────────────
 
+echo ""
+
+# Legacy keychain entries (from old OBO flow)
 python3 -c "
 import keyring
 cleared = []
@@ -84,18 +171,17 @@ for key in ['blueprint_secret', 'human_refresh_token', 'agent_password']:
     except Exception:
         pass
 if cleared:
-    print(f'  ✅ Cleared cached credentials: {\", \".join(cleared)}')
-else:
-    print('  ⚠️  No cached credentials found (or keyring unavailable)')
-" || echo -e "  ${YELLOW}⚠️  Could not clear credential store${NC}"
-
-# ── Remove .env ─────────────────────────────────────────────────────────────
+    print(f'  ✅ Cleared legacy keychain entries: {\", \".join(cleared)}')
+" 2>/dev/null || true
 
 if [ -f .env ]; then
     rm -f .env
-    echo -e "  ${GREEN}✅ Removed .env file${NC}"
-else
-    echo -e "  ${YELLOW}⚠️  No .env file to remove${NC}"
+    echo -e "  ${GREEN}✅ Removed .env${NC}"
+fi
+
+if [ -f .openclaw-state.json ]; then
+    rm -f .openclaw-state.json
+    echo -e "  ${GREEN}✅ Removed .openclaw-state.json${NC}"
 fi
 
 echo ""

@@ -13,30 +13,14 @@ class AuthError(OpenclawError):
     """Authentication/identity errors."""
 
 
-class MSALError(AuthError):
-    """MSAL returned an error dict instead of a token."""
+class TokenExchangeError(AuthError):
+    """Three-hop token exchange failed (Blueprint → Agent Identity → Agent User)."""
 
-    def __init__(self, error: str, description: str) -> None:
+    def __init__(self, hop: str, error: str, description: str) -> None:
+        self.hop = hop
         self.error = error
         self.description = description
-        super().__init__(f"{error}: {description}")
-
-
-class DeviceCodeTimeout(AuthError):
-    """Device code flow timed out waiting for user authentication."""
-
-
-class ConsentDenied(AuthError):
-    """User denied consent for requested permissions."""
-
-
-class OBOExchangeError(AuthError):
-    """On-behalf-of token exchange failed."""
-
-    def __init__(self, error: str, description: str) -> None:
-        self.error = error
-        self.description = description
-        super().__init__(f"OBO exchange failed — {error}: {description}")
+        super().__init__(f"Token exchange failed at {hop} — {error}: {description}")
 
 
 class AgentIDNotAvailable(AuthError):
@@ -52,7 +36,7 @@ class TeamsError(OpenclawError):
 
 
 class TeamsNotLicensed(TeamsError):
-    """User does not have a Teams license."""
+    """Agent User does not have a Teams license."""
 
 
 class ChatNotFound(TeamsError):

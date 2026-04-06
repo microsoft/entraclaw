@@ -6,15 +6,12 @@ from openclaw.errors import (
     AgentIDNotAvailable,
     AuthError,
     ChatNotFound,
-    ConsentDenied,
-    DeviceCodeTimeout,
     MessageTooLong,
-    MSALError,
-    OBOExchangeError,
     OpenclawError,
     RateLimitError,
     TeamsError,
     TeamsNotLicensed,
+    TokenExchangeError,
     TokenExpiredError,
 )
 
@@ -25,17 +22,8 @@ class TestErrorHierarchy:
     def test_auth_errors_inherit_openclaw(self) -> None:
         assert issubclass(AuthError, OpenclawError)
 
-    def test_msal_error_inherits_auth(self) -> None:
-        assert issubclass(MSALError, AuthError)
-
-    def test_device_code_timeout_inherits_auth(self) -> None:
-        assert issubclass(DeviceCodeTimeout, AuthError)
-
-    def test_consent_denied_inherits_auth(self) -> None:
-        assert issubclass(ConsentDenied, AuthError)
-
-    def test_obo_exchange_error_inherits_auth(self) -> None:
-        assert issubclass(OBOExchangeError, AuthError)
+    def test_token_exchange_error_inherits_auth(self) -> None:
+        assert issubclass(TokenExchangeError, AuthError)
 
     def test_agent_id_not_available_inherits_auth(self) -> None:
         assert issubclass(AgentIDNotAvailable, AuthError)
@@ -60,17 +48,13 @@ class TestErrorHierarchy:
 
 
 class TestErrorMessages:
-    def test_msal_error_message(self) -> None:
-        err = MSALError("invalid_grant", "Token expired")
-        assert "invalid_grant" in str(err)
-        assert "Token expired" in str(err)
-        assert err.error == "invalid_grant"
-        assert err.description == "Token expired"
-
-    def test_obo_exchange_error_message(self) -> None:
-        err = OBOExchangeError("interaction_required", "Consent needed")
-        assert "interaction_required" in str(err)
-        assert err.error == "interaction_required"
+    def test_token_exchange_error_message(self) -> None:
+        err = TokenExchangeError("hop1:blueprint", "invalid_client", "Bad secret")
+        assert "hop1:blueprint" in str(err)
+        assert "invalid_client" in str(err)
+        assert err.hop == "hop1:blueprint"
+        assert err.error == "invalid_client"
+        assert err.description == "Bad secret"
 
     def test_rate_limit_retry_after(self) -> None:
         err = RateLimitError(30)
@@ -84,10 +68,7 @@ class TestErrorMessages:
     def test_catch_all_openclaw_errors(self) -> None:
         """All custom errors can be caught with ``except OpenclawError``."""
         errors = [
-            MSALError("e", "d"),
-            DeviceCodeTimeout("t"),
-            ConsentDenied("c"),
-            OBOExchangeError("e", "d"),
+            TokenExchangeError("hop1", "e", "d"),
             AgentIDNotAvailable("a"),
             TokenExpiredError("t"),
             TeamsNotLicensed("l"),

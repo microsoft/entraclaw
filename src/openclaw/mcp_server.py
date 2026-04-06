@@ -1,12 +1,11 @@
 """Openclaw MCP server — pre-authenticated, simple tools.
 
 The server loads credentials from ``.env`` (written by ``scripts/setup.sh``),
-acquires an agent token via OBO (On-Behalf-Of), and creates the Teams chat
-on startup.  NO device-code flows.  NO ROPC.  NO fake user accounts.
-If authentication fails, the server prints an error and exits.
+acquires an Agent User token via the three-hop flow (Blueprint → Agent Identity
+→ Agent User), and creates the Teams chat on startup.
 
-Run directly with ``python -m openclaw.mcp_server`` or via the
-``openclaw-mcp`` console script.
+No device-code flows.  No OBO.  No fake user accounts.
+The Agent User has its own Teams identity and license.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ import sys
 from mcp.server.fastmcp import FastMCP
 
 from openclaw.config import get_config
-from openclaw.errors import MSALError, OBOExchangeError, OpenclawError
+from openclaw.errors import OpenclawError, TokenExchangeError
 from openclaw.logging_config import setup_logging
 
 logger: logging.Logger | None = None
@@ -30,7 +29,7 @@ _state: dict[str, object] = {}
 
 
 async def _initialize() -> None:
-    """Acquire the agent token via OBO and set up the Teams chat.
+    """Acquire the Agent User token and set up the Teams chat.
 
     Called lazily on the first tool invocation.  All config comes from
     environment variables (loaded from ``.env`` by ``openclaw.config``).
@@ -38,7 +37,7 @@ async def _initialize() -> None:
     if _state.get("initialized"):
         return
 
-    from openclaw.tools.teams import acquire_agent_token, create_or_find_chat
+    from openclaw.tools.teams import acquire_agent_user_token, create_or_find_chat
 
     config = get_config()
 
@@ -50,12 +49,12 @@ async def _initialize() -> None:
         )
         sys.exit(1)
 
-    # Acquire agent-attributed token via OBO flow
+    # Acquire Agent User token via three-hop flow
     try:
-        token = acquire_agent_token(config)
-    except (MSALError, OBOExchangeError, OpenclawError) as exc:
+        token = acquire_agent_user_token(config)
+    except (TokenExchangeError, OpenclawError) as exc:
         print(  # noqa: T201
-            f"ERROR: Failed to acquire agent token via OBO. Run ./scripts/setup.sh first.\n{exc}",
+            f"ERROR: Failed to acquire Agent User token. Run ./scripts/setup.sh first.\n{exc}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -86,7 +85,7 @@ async def _initialize() -> None:
 async def openclaw_teams_send(message: str, content_type: str = "text") -> str:
     """Send a message to the human user in Microsoft Teams.
 
-    The message is sent FROM the Openclaw Agent user (not the human user).
+    The message is sent FROM the Openclaw Agent User (not the human user).
     Use this to report status, results, or ask questions.
     """
     await _initialize()
@@ -177,7 +176,7 @@ def main() -> None:
     """Entry point for ``openclaw-mcp`` console script."""
     global logger
     logger = setup_logging()
-    logger.info("Starting Openclaw MCP server (pre-authenticated)")
+    logger.info("Starting Openclaw MCP server (Agent User auth)")
     mcp.run(transport="stdio")
 
 

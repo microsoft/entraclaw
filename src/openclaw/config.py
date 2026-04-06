@@ -50,6 +50,8 @@ class OpenclawConfig:
     blueprint_secret: str | None = field(default=None)
     agent_id: str | None = field(default=None)
     agent_object_id: str | None = field(default=None)
+    agent_user_id: str | None = field(default=None)
+    agent_user_upn: str | None = field(default=None)
     human_user_id: str | None = field(default=None)
     human_upn: str | None = field(default=None)
     log_dir: Path = field(default_factory=lambda: _default_dir("logs"))
@@ -67,6 +69,8 @@ class OpenclawConfig:
             blueprint_secret=os.environ.get("OPENCLAW_BLUEPRINT_SECRET"),
             agent_id=os.environ.get("OPENCLAW_AGENT_ID"),
             agent_object_id=os.environ.get("OPENCLAW_AGENT_OBJECT_ID"),
+            agent_user_id=os.environ.get("OPENCLAW_AGENT_USER_ID"),
+            agent_user_upn=os.environ.get("OPENCLAW_AGENT_USER_UPN"),
             human_user_id=os.environ.get("OPENCLAW_HUMAN_USER_ID"),
             human_upn=os.environ.get("OPENCLAW_HUMAN_UPN"),
             log_dir=Path(os.environ.get("OPENCLAW_LOG_DIR", _default_dir("logs"))),
