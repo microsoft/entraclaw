@@ -85,10 +85,12 @@ def acquire_agent_user_token(config: OpenclawConfig) -> str:
 
     url = _token_url(config.tenant_id)  # type: ignore[arg-type]
 
+    timeout = httpx.Timeout(15.0)
+
     # Hop 1: Blueprint exchange token (T1) via client_credentials
     # The Blueprint authenticates with its client_secret and requests a token
     # scoped for Agent Identity impersonation (fmi_path=AgentIdentity).
-    with httpx.Client() as client:
+    with httpx.Client(timeout=timeout) as client:
         hop1_resp = client.post(url, data={
             "client_id": config.blueprint_app_id,
             "scope": "api://AzureADTokenExchange/.default",
@@ -101,7 +103,7 @@ def acquire_agent_user_token(config: OpenclawConfig) -> str:
     # Hop 2: Agent Identity exchange token (T2)
     # The Agent Identity presents T1 as its client assertion.
     # Entra validates T1.aud == Agent Identity's parent (Blueprint).
-    with httpx.Client() as client:
+    with httpx.Client(timeout=timeout) as client:
         hop2_resp = client.post(url, data={
             "client_id": config.agent_id,
             "scope": "api://AzureADTokenExchange/.default",
@@ -115,7 +117,7 @@ def acquire_agent_user_token(config: OpenclawConfig) -> str:
     # Presents both T1 (client_assertion) and T2 (user_federated_identity_credential).
     # Entra validates T2.aud == Agent Identity, then issues a delegated token
     # with idtyp=user for the Agent User.
-    with httpx.Client() as client:
+    with httpx.Client(timeout=timeout) as client:
         hop3_resp = client.post(url, data={
             "client_id": config.agent_id,
             "scope": "https://graph.microsoft.com/.default",
