@@ -121,6 +121,15 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 **Fix:** Renamed to `send_teams_message`, `read_teams_messages`, `whoami`, `audit_log`. Added trigger phrases to descriptions: "message", "notify", "tell", "ping", "contact". Added FastMCP `instructions` field with intent→tool mapping.
 **Prevention:** Name tools as verbs the user would say. Pack descriptions with synonyms.
 
+### Learning #15: oAuth2PermissionGrants Must Use v1.0 API, Not Beta
+
+**Date:** 2026-04-06
+**Context:** Consent grant for Agent User returning 403 even with correct permissions
+**Problem:** `graph_request()` helper prepends `GRAPH_BASE` which is `https://graph.microsoft.com/beta`. The `oAuth2PermissionGrants` endpoint on beta either behaves differently or has stricter permission requirements than v1.0.
+**Root cause:** The consent grant function used `graph_request("POST", "/oauth2PermissionGrants", ...)` which called `https://graph.microsoft.com/beta/oauth2PermissionGrants`. The provisioner's permissions worked on v1.0 but got 403 on beta.
+**Fix:** Use `requests.post("https://graph.microsoft.com/v1.0/oauth2PermissionGrants", ...)` directly instead of `graph_request()`. Also changed the error from a WARNING (non-blocking) to `sys.exit(1)` (blocking) because without consent, hop 3 always fails.
+**Prevention:** When a Graph API exists on both v1.0 and beta, use v1.0 for stability. Don't assume `graph_request()` is correct for everything — check which API version the endpoint needs.
+
 ---
 
 ## Historical Learnings

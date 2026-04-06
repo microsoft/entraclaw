@@ -449,15 +449,18 @@ def grant_agent_user_consent(
         print("  Consent grant will need to be done manually")
         return
 
-    # Check if consent already exists
-    resp = graph_request(
-        "GET",
-        "/oauth2PermissionGrants"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    # Check if consent already exists (v1.0 API)
+    check_url = (
+        "https://graph.microsoft.com/v1.0/oauth2PermissionGrants"
         f"?$filter=clientId eq '{agent_identity_obj_id}'"
         f" and principalId eq '{agent_user_obj_id}'"
-        f" and resourceId eq '{graph_sp_id}'",
-        token,
     )
+    resp = requests.get(check_url, headers=headers)
     if resp.status_code == 200:
         existing = resp.json().get("value", [])
         if existing:
@@ -476,14 +479,23 @@ def grant_agent_user_consent(
         "startTime": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
-    # Use v1.0 endpoint for oauth2PermissionGrants
-    resp = graph_request("POST", "/oauth2PermissionGrants", token, json_body=body)
+    # oAuth2PermissionGrants is a v1.0 API — use the full URL, not graph_request()
+    # which prepends the beta base URL.
+    resp = requests.post(
+        "https://graph.microsoft.com/v1.0/oauth2PermissionGrants",
+        headers=headers,
+        json=body,
+    )
     if resp.status_code in (200, 201):
         print(f"  [new] Consent granted: {scopes}")
     else:
-        print(f"  WARNING: Consent grant returned {resp.status_code}")
-        print(f"  Response: {resp.text[:300]}")
-        print("  You may need to grant consent manually via the Entra admin center")
+        print(f"  ERROR: Consent grant failed ({resp.status_code})")
+        print(f"  Response: {resp.text[:400]}")
+        print("")
+        print("  This is a BLOCKING error — hop 3 of the three-hop flow will fail")
+        print("  without this consent grant. Check that the provisioner has")
+        print("  DelegatedPermissionGrant.ReadWrite.All permission.")
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
