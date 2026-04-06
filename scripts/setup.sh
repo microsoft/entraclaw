@@ -226,11 +226,26 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 step 7 "Granting admin consent for permissions"
 
-if az ad app permission admin-consent --id "$CLIENT_ID" 2>/dev/null; then
+# Admin consent can take a moment after permission changes — retry up to 3 times
+CONSENT_GRANTED=false
+for i in 1 2 3; do
+    if az ad app permission admin-consent --id "$CLIENT_ID" 2>&1; then
+        CONSENT_GRANTED=true
+        break
+    else
+        if [ "$i" -lt 3 ]; then
+            warn "Consent attempt $i failed, retrying in 5 seconds..."
+            sleep 5
+        fi
+    fi
+done
+
+if [ "$CONSENT_GRANTED" = true ]; then
     success "Admin consent granted"
 else
-    warn "Admin consent may need to be granted manually in the Entra portal"
-    warn "Visit: https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/CallAnAPI/appId/$CLIENT_ID"
+    warn "Admin consent failed after 3 attempts. Grant manually:"
+    warn "  az ad app permission admin-consent --id $CLIENT_ID"
+    warn "  Or visit: https://entra.microsoft.com → App registrations → Openclaw Agent → API permissions → Grant admin consent"
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
