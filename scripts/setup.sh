@@ -56,7 +56,7 @@ data = json.loads(state_file.read_text())
 val = data.get('$key', '')
 if val:
     print(val)
-" 2>/dev/null || echo ""
+" || echo ""
 }
 
 # ════════════════════════════════════════════════════════════════════════════

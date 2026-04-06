@@ -27,7 +27,7 @@ _read_state() {
 import json, pathlib
 data = json.loads(pathlib.Path('.openclaw-state.json').read_text())
 print(data.get('$key', ''))
-" 2>/dev/null || echo ""
+" || echo ""
     else
         echo ""
     fi
@@ -60,7 +60,7 @@ fi
 PROV_FOUND=false
 if az account show &>/dev/null; then
     for PROV_NAME in "Openclaw Provisioner" "Openclaw Agent ID Provisioner"; do
-        PROV_CHECK=$(az ad app list --display-name "$PROV_NAME" --query "[0].id" -o tsv 2>/dev/null) || true
+        PROV_CHECK=$(az ad app list --display-name "$PROV_NAME" --query "[0].id" -o tsv) || true
         if [ -n "$PROV_CHECK" ]; then
             PROV_FOUND=true
             HAS_ENTRA_RESOURCES=true
@@ -101,7 +101,7 @@ echo ""
 # ── 1. Delete Agent User (child — must go before Agent Identity) ──────────
 
 if [ -n "$AGENT_USER_ID" ]; then
-    if az ad user delete --id "$AGENT_USER_ID" 2>/dev/null; then
+    if az ad user delete --id "$AGENT_USER_ID"; then
         echo -e "  ${GREEN}✅ Deleted Agent User ($AGENT_USER_ID)${NC}"
     else
         echo -e "  ${YELLOW}⚠️  Could not delete Agent User — may already be deleted${NC}"
@@ -113,7 +113,7 @@ fi
 # ── 2. Delete Agent Identity (service principal) ──────────────────────────
 
 if [ -n "$AGENT_OBJECT_ID" ]; then
-    if az ad sp delete --id "$AGENT_OBJECT_ID" 2>/dev/null; then
+    if az ad sp delete --id "$AGENT_OBJECT_ID"; then
         echo -e "  ${GREEN}✅ Deleted Agent Identity SP ($AGENT_OBJECT_ID)${NC}"
     else
         echo -e "  ${YELLOW}⚠️  Could not delete Agent Identity SP — may already be deleted${NC}"
@@ -125,7 +125,7 @@ fi
 # ── 3. Delete Blueprint (app registration + BlueprintPrincipal cascade) ───
 
 if [ -n "$BLUEPRINT_OBJECT_ID" ]; then
-    if az ad app delete --id "$BLUEPRINT_OBJECT_ID" 2>/dev/null; then
+    if az ad app delete --id "$BLUEPRINT_OBJECT_ID"; then
         echo -e "  ${GREEN}✅ Deleted Blueprint app registration ($BLUEPRINT_APP_ID)${NC}"
     else
         echo -e "  ${YELLOW}⚠️  Could not delete Blueprint — may already be deleted${NC}"
@@ -134,11 +134,13 @@ elif [ -n "$BLUEPRINT_APP_ID" ]; then
     # Fallback: look up object ID by app ID
     OBJ_ID=$(az ad app list \
         --filter "appId eq '${BLUEPRINT_APP_ID}'" \
-        --query "[0].id" -o tsv 2>/dev/null || echo "")
+        --query "[0].id" -o tsv) || true
     if [ -n "$OBJ_ID" ]; then
-        az ad app delete --id "$OBJ_ID" 2>/dev/null && \
-            echo -e "  ${GREEN}✅ Deleted Blueprint app registration ($BLUEPRINT_APP_ID)${NC}" || \
+        if az ad app delete --id "$OBJ_ID"; then
+            echo -e "  ${GREEN}✅ Deleted Blueprint app registration ($BLUEPRINT_APP_ID)${NC}"
+        else
             echo -e "  ${YELLOW}⚠️  Could not delete Blueprint${NC}"
+        fi
     else
         echo -e "  ${YELLOW}⚠️  Blueprint not found in directory — may already be deleted${NC}"
     fi
@@ -150,11 +152,13 @@ fi
 
 for PROV_NAME in "Openclaw Provisioner" "Openclaw Agent ID Provisioner"; do
     PROV_OBJ=$(az ad app list --display-name "$PROV_NAME" \
-        --query "[0].id" -o tsv 2>/dev/null || echo "")
+        --query "[0].id" -o tsv) || true
     if [ -n "$PROV_OBJ" ]; then
-        az ad app delete --id "$PROV_OBJ" 2>/dev/null && \
-            echo -e "  ${GREEN}✅ Deleted Provisioner app ($PROV_NAME)${NC}" || \
+        if az ad app delete --id "$PROV_OBJ"; then
+            echo -e "  ${GREEN}✅ Deleted Provisioner app ($PROV_NAME)${NC}"
+        else
             echo -e "  ${YELLOW}⚠️  Could not delete Provisioner app ($PROV_NAME)${NC}"
+        fi
     fi
 done
 
@@ -174,7 +178,7 @@ for key in ['blueprint_secret', 'human_refresh_token', 'agent_password']:
         pass
 if cleared:
     print(f'  ✅ Cleared legacy keychain entries: {\", \".join(cleared)}')
-" 2>/dev/null || true
+" || true
 
 if [ -f .env ]; then
     rm -f .env
