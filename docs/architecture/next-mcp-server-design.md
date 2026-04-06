@@ -70,6 +70,8 @@ The user adds Openclaw to their Copilot CLI MCP config:
 
 ```json
 // ~/.copilot/mcp-config.json (or .vscode/mcp.json)
+// ⚠️ MVP ONLY: client secret in env vars is acceptable for dev.
+//    Production must use split architecture (secret stays in cloud service).
 {
   "mcpServers": {
     "openclaw": {
@@ -85,7 +87,21 @@ The user adds Openclaw to their Copilot CLI MCP config:
 }
 ```
 
-For the split architecture (production), the client secret moves to a cloud service and the env vars change to point at it.
+### Python Dependencies
+
+Add to `pyproject.toml`:
+```toml
+dependencies = [
+    "msal>=1.28.0",
+    "msal-extensions>=1.2.0",  # persistent token cache (OS-native)
+    "mcp>=1.0.0",              # MCP server SDK (verify package name)
+    "httpx>=0.27.0",           # async HTTP for Graph API calls
+    "keyring>=25.0.0",         # OS credential storage abstraction
+    "pydantic>=2.0",           # structured models
+]
+```
+
+> **Note:** The Python MCP SDK landscape is still settling. Check whether `mcp`, `modelcontextprotocol`, or `fastmcp` is the right package before starting.
 
 ## Bootstrap Sequence (Detailed)
 
@@ -144,9 +160,23 @@ src/openclaw/
 
 ## What to Build First
 
-1. `mcp_server.py` — bare MCP server with tool registration
-2. `tools/identity.py` — `openclaw_bootstrap` with device code flow (skip WAM for first pass)
-3. `tools/teams.py` — `openclaw_teams_connect` + `openclaw_teams_send` + `openclaw_teams_poll`
-4. `tools/audit.py` — `openclaw_audit_log` writing to JSON file
-5. `platform/windows.py` — `keyring` integration for Credential Manager
-6. Wire it all together and test with Copilot CLI
+### Tonight's Goal (MVP of the MVP)
+
+> "Run Copilot CLI on the Windows VM, type something, and see a message appear in Teams from the agent."
+
+Three tools. That's it:
+1. `openclaw_bootstrap` — get an agent-attributed token
+2. `openclaw_teams_connect` — create a 1:1 chat
+3. `openclaw_teams_send` — send a message
+
+Everything else (`audit_log`, `refresh`, `revoke`, `whoami`, `teams_poll`, `teams_presence`) is iteration.
+
+### Build Order
+
+1. `config.py` — environment-based configuration (tenant ID, client ID, secret from env vars)
+2. `models.py` — Pydantic models for tokens, identity, audit events
+3. `platform/windows.py` — `keyring` integration for Credential Manager (identity needs this)
+4. `mcp_server.py` — bare MCP server with tool registration
+5. `tools/identity.py` — `openclaw_bootstrap` with device code flow (stores to credential store)
+6. `tools/teams.py` — `openclaw_teams_connect` + `openclaw_teams_send` (needs identity working first)
+7. `tools/audit.py` — `openclaw_audit_log` writing to JSON file (add after Teams works)

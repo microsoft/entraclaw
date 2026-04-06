@@ -1,0 +1,1 @@
+/Volumes/Development HD/openclaw-identity-research/.claude/skills/gstack/ship/SKILL.md

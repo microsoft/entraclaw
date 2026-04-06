@@ -11,12 +11,13 @@ import { generateTestFailureTriage } from './preamble';
 import { generateCommandReference, generateSnapshotFlags, generateBrowseSetup } from './browse';
 import { generateDesignMethodology, generateDesignHardRules, generateDesignOutsideVoices, generateDesignReviewLite, generateDesignSketch, generateDesignSetup, generateDesignMockup, generateDesignShotgunLoop } from './design';
 import { generateTestBootstrap, generateTestCoverageAuditPlan, generateTestCoverageAuditShip, generateTestCoverageAuditReview } from './testing';
-import { generateReviewDashboard, generatePlanFileReviewReport, generateSpecReviewLoop, generateBenefitsFrom, generateCodexSecondOpinion, generateAdversarialStep, generateCodexPlanReview, generatePlanCompletionAuditShip, generatePlanCompletionAuditReview, generatePlanVerificationExec, generateScopeDrift } from './review';
+import { generateReviewDashboard, generatePlanFileReviewReport, generateSpecReviewLoop, generateBenefitsFrom, generateCodexSecondOpinion, generateAdversarialStep, generateCodexPlanReview, generatePlanCompletionAuditShip, generatePlanCompletionAuditReview, generatePlanVerificationExec, generateScopeDrift, generateCrossReviewDedup } from './review';
 import { generateSlugEval, generateSlugSetup, generateBaseBranchDetect, generateDeployBootstrap, generateQAMethodology, generateCoAuthorTrailer, generateChangelogWorkflow } from './utility';
 import { generateLearningsSearch, generateLearningsLog } from './learnings';
 import { generateConfidenceCalibration } from './confidence';
 import { generateInvokeSkill } from './composition';
 import { generateReviewArmy } from './review-army';
+import { generateDxFramework } from './dx';
 
 export const RESOLVERS: Record<string, ResolverFn> = {
   SLUG_EVAL: generateSlugEval,
@@ -59,4 +60,6 @@ export const RESOLVERS: Record<string, ResolverFn> = {
   INVOKE_SKILL: generateInvokeSkill,
   CHANGELOG_WORKFLOW: generateChangelogWorkflow,
   REVIEW_ARMY: generateReviewArmy,
+  CROSS_REVIEW_DEDUP: generateCrossReviewDedup,
+  DX_FRAMEWORK: generateDxFramework,
 };

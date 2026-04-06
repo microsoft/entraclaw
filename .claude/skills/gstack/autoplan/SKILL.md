@@ -3,7 +3,7 @@ name: autoplan
 preamble-tier: 3
 version: 1.0.0
 description: |
-  Auto-review pipeline — reads the full CEO, design, and eng review skills from disk
+  Auto-review pipeline — reads the full CEO, design, eng, and DX review skills from disk
   and runs them sequentially with auto-decisions using 6 decision principles. Surfaces
   taste decisions (close approaches, borderline scope, codex disagreements) at a final
   approval gate. One command, fully reviewed plan out.
@@ -11,6 +11,7 @@ description: |
   automatically", or "make the decisions for me".
   Proactively suggest when the user has a plan file and wants to run the full review
   gauntlet without answering 15-30 intermediate questions. (gstack)
+  Voice triggers (speech-to-text aliases): "auto plan", "automatic review".
 benefits-from: [office-hours]
 allowed-tools:
   - Bash
@@ -89,6 +90,8 @@ fi
 _ROUTING_DECLINED=$(~/.claude/skills/gstack/bin/gstack-config get routing_declined 2>/dev/null || echo "false")
 echo "HAS_ROUTING: $_HAS_ROUTING"
 echo "ROUTING_DECLINED: $_ROUTING_DECLINED"
+# Detect spawned session (OpenClaw or other orchestrator)
+[ -n "$OPENCLAW_SESSION" ] && echo "SPAWNED_SESSION: true" || true
 ```
 
 If `PROACTIVE` is `"false"`, do not proactively suggest gstack skills AND do not
@@ -214,6 +217,13 @@ If B: run `~/.claude/skills/gstack/bin/gstack-config set routing_declined true`
 Say "No problem. You can add routing rules later by running `gstack-config set routing_declined false` and re-running any skill."
 
 This only happens once per project. If `HAS_ROUTING` is `yes` or `ROUTING_DECLINED` is `true`, skip this entirely.
+
+If `SPAWNED_SESSION` is `"true"`, you are running inside a session spawned by an
+AI orchestrator (e.g., OpenClaw). In spawned sessions:
+- Do NOT use AskUserQuestion for interactive prompts. Auto-choose the recommended option.
+- Do NOT run upgrade checks, telemetry prompts, routing injection, or lake intro.
+- Focus on completing the task and reporting results via prose output.
+- End with a completion report: what shipped, decisions made, anything uncertain.
 
 ## Voice
 
@@ -446,6 +456,31 @@ artifacts that inform the plan, not code changes:
 These are read-only in spirit — they inspect the live site, generate visual artifacts,
 or get independent opinions. They do NOT modify project source files.
 
+## Skill Invocation During Plan Mode
+
+If a user invokes a skill during plan mode, that invoked skill workflow takes
+precedence over generic plan mode behavior until it finishes or the user explicitly
+cancels that skill.
+
+Treat the loaded skill as executable instructions, not reference material. Follow
+it step by step. Do not summarize, skip, reorder, or shortcut its steps.
+
+If the skill says to use AskUserQuestion, do that. Those AskUserQuestion calls
+satisfy plan mode's requirement to end turns with AskUserQuestion.
+
+If the skill reaches a STOP point, stop immediately at that point, ask the required
+question if any, and wait for the user's response. Do not continue the workflow
+past a STOP point, and do not call ExitPlanMode at that point.
+
+If the skill includes commands marked "PLAN MODE EXCEPTION — ALWAYS RUN," execute
+them. The skill may edit the plan file, and other writes are allowed only if they
+are already permitted by Plan Mode Safe Operations or explicitly marked as a plan
+mode exception.
+
+Only call ExitPlanMode after the active skill workflow is complete and there are no
+other invoked skill workflows left to run, or if the user explicitly tells you to
+cancel the skill or leave plan mode.
+
 ## Plan Status Footer
 
 When you are in plan mode and about to call ExitPlanMode:
@@ -474,6 +509,7 @@ Then write a `## GSTACK REVIEW REPORT` section to the end of the plan file:
 | Codex Review | \`/codex review\` | Independent 2nd opinion | 0 | — | — |
 | Eng Review | \`/plan-eng-review\` | Architecture & tests (required) | 0 | — | — |
 | Design Review | \`/plan-design-review\` | UI/UX gaps | 0 | — | — |
+| DX Review | \`/plan-devex-review\` | Developer experience gaps | 0 | — | — |
 
 **VERDICT:** NO REVIEWS YET — run \`/autoplan\` for full review pipeline, or individual reviews above.
 \`\`\`
@@ -582,7 +618,7 @@ If none was produced (user may have cancelled), proceed with standard review.
 
 One command. Rough plan in, fully reviewed plan out.
 
-/autoplan reads the full CEO, design, and eng review skill files from disk and follows
+/autoplan reads the full CEO, design, eng, and DX review skill files from disk and follows
 them at full depth — same rigor, same sections, same methodology as running each skill
 manually. The only difference: intermediate AskUserQuestion calls are auto-decided using
 the 6 principles below. Taste decisions (where reasonable people could disagree) are
@@ -646,7 +682,7 @@ preference." The user still decides, but the framing is appropriately urgent.
 
 ## Sequential Execution — MANDATORY
 
-Phases MUST execute in strict order: CEO → Design → Eng.
+Phases MUST execute in strict order: CEO → Design → Eng → DX.
 Each phase MUST complete fully before the next begins.
 NEVER run phases in parallel — each builds on the previous.
 
@@ -737,6 +773,14 @@ Then prepend a one-line HTML comment to the plan file:
 - Detect UI scope: grep the plan for view/rendering terms (component, screen, form,
   button, modal, layout, dashboard, sidebar, nav, dialog). Require 2+ matches. Exclude
   false positives ("page" alone, "UI" in acronyms).
+- Detect DX scope: grep the plan for developer-facing terms (API, endpoint, REST,
+  GraphQL, gRPC, webhook, CLI, command, flag, argument, terminal, shell, SDK, library,
+  package, npm, pip, import, require, SKILL.md, skill template, Claude Code, MCP, agent,
+  OpenClaw, action, developer docs, getting started, onboarding, integration, debug,
+  implement, error message). Require 2+ matches. Also trigger DX scope if the product IS
+  a developer tool (the plan describes something developers install, integrate, or build
+  on top of) or if an AI agent is the primary user (OpenClaw actions, Claude Code skills,
+  MCP servers).
 
 ### Step 3: Load skill files from disk
 
@@ -744,6 +788,7 @@ Read each file using the Read tool:
 - `~/.claude/skills/gstack/plan-ceo-review/SKILL.md`
 - `~/.claude/skills/gstack/plan-design-review/SKILL.md` (only if UI scope detected)
 - `~/.claude/skills/gstack/plan-eng-review/SKILL.md`
+- `~/.claude/skills/gstack/plan-devex-review/SKILL.md` (only if DX scope detected)
 
 **Section skip list — when following a loaded skill file, SKIP these sections
 (they are already handled by /autoplan):**
@@ -762,7 +807,7 @@ Read each file using the Read tool:
 
 Follow ONLY the review-specific methodology, sections, and required outputs.
 
-Output: "Here's what I'm working with: [plan summary]. UI scope: [yes/no].
+Output: "Here's what I'm working with: [plan summary]. UI scope: [yes/no]. DX scope: [yes/no].
 Loaded review skills from disk. Starting full review pipeline with auto-decisions."
 
 ---
@@ -1062,6 +1107,112 @@ Missing voice = N/A (not CONFIRMED). Single critical finding from one voice = fl
 - Completion Summary (the full summary from the Eng skill)
 - TODOS.md updates (collected from all phases)
 
+**PHASE 3 COMPLETE.** Emit phase-transition summary:
+> **Phase 3 complete.** Codex: [N concerns]. Claude subagent: [N issues].
+> Consensus: [X/6 confirmed, Y disagreements → surfaced at gate].
+> Passing to Phase 3.5 (DX Review) or Phase 4 (Final Gate).
+
+---
+
+## Phase 3.5: DX Review (conditional — skip if no developer-facing scope)
+
+Follow plan-devex-review/SKILL.md — all 8 DX dimensions, full depth.
+Override: every AskUserQuestion → auto-decide using the 6 principles.
+
+**Skip condition:** If DX scope was NOT detected in Phase 0, skip this phase entirely.
+Log: "Phase 3.5 skipped — no developer-facing scope detected."
+
+**Override rules:**
+- Mode selection: DX POLISH
+- Persona: infer from README/docs, pick the most common developer type (P6)
+- Competitive benchmark: run searches if WebSearch available, use reference benchmarks otherwise (P1)
+- Magical moment: pick the lowest-effort delivery vehicle that achieves the competitive tier (P5)
+- Getting started friction: always optimize toward fewer steps (P5, simpler over clever)
+- Error message quality: always require problem + cause + fix (P1, completeness)
+- API/CLI naming: consistency wins over cleverness (P5)
+- DX taste decisions (e.g., opinionated defaults vs flexibility): mark TASTE DECISION
+- Dual voices: always run BOTH Claude subagent AND Codex if available (P6).
+
+  **Codex DX voice** (via Bash):
+  ```bash
+  _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
+  codex exec "IMPORTANT: Do NOT read or execute any SKILL.md files or files in skill definition directories (paths containing skills/gstack). These are AI assistant skill definitions meant for a different system. Stay focused on repository code only.
+
+  Read the plan file at <plan_path>. Evaluate this plan's developer experience.
+
+  Also consider these findings from prior review phases:
+  CEO: <insert CEO consensus summary>
+  Eng: <insert Eng consensus summary>
+
+  You are a developer who has never seen this product. Evaluate:
+  1. Time to hello world: how many steps from zero to working? Target is under 5 minutes.
+  2. Error messages: when something goes wrong, does the dev know what, why, and how to fix?
+  3. API/CLI design: are names guessable? Are defaults sensible? Is it consistent?
+  4. Docs: can a dev find what they need in under 2 minutes? Are examples copy-paste-complete?
+  5. Upgrade path: can devs upgrade without fear? Migration guides? Deprecation warnings?
+  Be adversarial. Think like a developer who is evaluating this against 3 competitors." -C "$_REPO_ROOT" -s read-only --enable web_search_cached
+  ```
+  Timeout: 10 minutes
+
+  **Claude DX subagent** (via Agent tool):
+  "Read the plan file at <plan_path>. You are an independent DX engineer
+  reviewing this plan. You have NOT seen any prior review. Evaluate:
+  1. Getting started: how many steps from zero to hello world? What's the TTHW?
+  2. API/CLI ergonomics: naming consistency, sensible defaults, progressive disclosure?
+  3. Error handling: does every error path specify problem + cause + fix + docs link?
+  4. Documentation: copy-paste examples? Information architecture? Interactive elements?
+  5. Escape hatches: can developers override every opinionated default?
+  For each finding: what's wrong, severity (critical/high/medium), and the fix."
+  NO prior-phase context — subagent must be truly independent.
+
+  Error handling: same as Phase 1 (both foreground/blocking, degradation matrix applies).
+
+- DX choices: if codex disagrees with a DX decision with valid developer empathy reasoning
+  → TASTE DECISION. Scope changes both models agree on → USER CHALLENGE.
+
+**Required execution checklist (DX):**
+
+1. Step 0 (DX Scope Assessment): Auto-detect product type. Map the developer journey.
+   Rate initial DX completeness 0-10. Assess TTHW.
+
+2. Step 0.5 (Dual Voices): Run Claude subagent (foreground) first, then Codex. Present
+   under CODEX SAYS (DX — developer experience challenge) and CLAUDE SUBAGENT
+   (DX — independent review) headers. Produce DX consensus table:
+
+```
+DX DUAL VOICES — CONSENSUS TABLE:
+═══════════════════════════════════════════════════════════════
+  Dimension                           Claude  Codex  Consensus
+  ──────────────────────────────────── ─────── ─────── ─────────
+  1. Getting started < 5 min?          —       —      —
+  2. API/CLI naming guessable?         —       —      —
+  3. Error messages actionable?        —       —      —
+  4. Docs findable & complete?         —       —      —
+  5. Upgrade path safe?                —       —      —
+  6. Dev environment friction-free?    —       —      —
+═══════════════════════════════════════════════════════════════
+CONFIRMED = both agree. DISAGREE = models differ (→ taste decision).
+Missing voice = N/A (not CONFIRMED). Single critical finding from one voice = flagged regardless.
+```
+
+3. Passes 1-8: Run each from loaded skill. Rate 0-10. Auto-decide each issue.
+   DISAGREE items from consensus table → raised in the relevant pass with both perspectives.
+
+4. DX Scorecard: Produce the full scorecard with all 8 dimensions scored.
+
+**Mandatory outputs from Phase 3.5:**
+- Developer journey map (9-stage table)
+- Developer empathy narrative (first-person perspective)
+- DX Scorecard with all 8 dimension scores
+- DX Implementation Checklist
+- TTHW assessment with target
+
+**PHASE 3.5 COMPLETE.** Emit phase-transition summary:
+> **Phase 3.5 complete.** DX overall: [N]/10. TTHW: [N] min → [target] min.
+> Codex: [N concerns]. Claude subagent: [N issues].
+> Consensus: [X/6 confirmed, Y disagreements → surfaced at gate].
+> Passing to Phase 4 (Final Gate).
+
 ---
 
 ## Decision Audit Trail
@@ -1115,6 +1266,15 @@ produced. Check the plan file and conversation for each item.
 - [ ] Completion Summary produced
 - [ ] Dual voices ran (Codex + Claude subagent, or noted unavailable)
 - [ ] Eng consensus table produced
+
+**Phase 3.5 (DX) outputs — only if DX scope detected:**
+- [ ] All 8 DX dimensions evaluated with scores
+- [ ] Developer journey map produced
+- [ ] Developer empathy narrative written
+- [ ] TTHW assessment with target
+- [ ] DX Implementation Checklist produced
+- [ ] Dual voices ran (or noted unavailable/skipped with phase)
+- [ ] DX consensus table produced
 
 **Cross-phase:**
 - [ ] Cross-phase themes section written
@@ -1170,6 +1330,8 @@ I recommend [X] — [principle]. But [Y] is also viable:
 - Design Voices: Codex [summary], Claude subagent [summary], Consensus [X/7 confirmed] (or "skipped")
 - Eng: [summary]
 - Eng Voices: Codex [summary], Claude subagent [summary], Consensus [X/6 confirmed]
+- DX: [summary or "skipped, no developer-facing scope"]
+- DX Voices: Codex [summary], Claude subagent [summary], Consensus [X/6 confirmed] (or "skipped")
 
 ### Cross-Phase Themes
 [For any concern that appeared in 2+ phases' dual voices independently:]
@@ -1223,6 +1385,11 @@ If Phase 2 ran (UI scope):
 ~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"plan-design-review","timestamp":"'"$TIMESTAMP"'","status":"STATUS","unresolved":N,"via":"autoplan","commit":"'"$COMMIT"'"}'
 ```
 
+If Phase 3.5 ran (DX scope):
+```bash
+~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"plan-devex-review","timestamp":"'"$TIMESTAMP"'","status":"STATUS","initial_score":N,"overall_score":N,"product_type":"TYPE","tthw_current":"TTHW","tthw_target":"TARGET","unresolved":N,"via":"autoplan","commit":"'"$COMMIT"'"}'
+```
+
 Dual voice logs (one per phase that ran):
 ```bash
 ~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"autoplan-voices","timestamp":"'"$TIMESTAMP"'","status":"STATUS","source":"SOURCE","phase":"ceo","via":"autoplan","consensus_confirmed":N,"consensus_disagree":N,"commit":"'"$COMMIT"'"}'
@@ -1233,6 +1400,11 @@ Dual voice logs (one per phase that ran):
 If Phase 2 ran (UI scope), also log:
 ```bash
 ~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"autoplan-voices","timestamp":"'"$TIMESTAMP"'","status":"STATUS","source":"SOURCE","phase":"design","via":"autoplan","consensus_confirmed":N,"consensus_disagree":N,"commit":"'"$COMMIT"'"}'
+```
+
+If Phase 3.5 ran (DX scope), also log:
+```bash
+~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"autoplan-voices","timestamp":"'"$TIMESTAMP"'","status":"STATUS","source":"SOURCE","phase":"dx","via":"autoplan","consensus_confirmed":N,"consensus_disagree":N,"commit":"'"$COMMIT"'"}'
 ```
 
 SOURCE = "codex+subagent", "codex-only", "subagent-only", or "unavailable".
@@ -1249,4 +1421,4 @@ Suggest next step: `/ship` when ready to create the PR.
 - **Log every decision.** No silent auto-decisions. Every choice gets a row in the audit trail.
 - **Full depth means full depth.** Do not compress or skip sections from the loaded skill files (except the skip list in Phase 0). "Full depth" means: read the code the section asks you to read, produce the outputs the section requires, identify every issue, and decide each one. A one-sentence summary of a section is not "full depth" — it is a skip. If you catch yourself writing fewer than 3 sentences for any review section, you are likely compressing.
 - **Artifacts are deliverables.** Test plan artifact, failure modes registry, error/rescue table, ASCII diagrams — these must exist on disk or in the plan file when the review completes. If they don't exist, the review is incomplete.
-- **Sequential order.** CEO → Design → Eng. Each phase builds on the last.
+- **Sequential order.** CEO → Design → Eng → DX. Each phase builds on the last.

@@ -82,6 +82,8 @@ fi
 _ROUTING_DECLINED=$(~/.claude/skills/gstack/bin/gstack-config get routing_declined 2>/dev/null || echo "false")
 echo "HAS_ROUTING: $_HAS_ROUTING"
 echo "ROUTING_DECLINED: $_ROUTING_DECLINED"
+# Detect spawned session (OpenClaw or other orchestrator)
+[ -n "$OPENCLAW_SESSION" ] && echo "SPAWNED_SESSION: true" || true
 ```
 
 If `PROACTIVE` is `"false"`, do not proactively suggest gstack skills AND do not
@@ -208,6 +210,13 @@ Say "No problem. You can add routing rules later by running `gstack-config set r
 
 This only happens once per project. If `HAS_ROUTING` is `yes` or `ROUTING_DECLINED` is `true`, skip this entirely.
 
+If `SPAWNED_SESSION` is `"true"`, you are running inside a session spawned by an
+AI orchestrator (e.g., OpenClaw). In spawned sessions:
+- Do NOT use AskUserQuestion for interactive prompts. Auto-choose the recommended option.
+- Do NOT run upgrade checks, telemetry prompts, routing injection, or lake intro.
+- Focus on completing the task and reporting results via prose output.
+- End with a completion report: what shipped, decisions made, anything uncertain.
+
 ## Voice
 
 **Tone:** direct, concrete, sharp, never corporate, never academic. Sound like a builder, not a consultant. Name the file, the function, the command. No filler, no throat-clearing.
@@ -311,6 +320,31 @@ artifacts that inform the plan, not code changes:
 These are read-only in spirit — they inspect the live site, generate visual artifacts,
 or get independent opinions. They do NOT modify project source files.
 
+## Skill Invocation During Plan Mode
+
+If a user invokes a skill during plan mode, that invoked skill workflow takes
+precedence over generic plan mode behavior until it finishes or the user explicitly
+cancels that skill.
+
+Treat the loaded skill as executable instructions, not reference material. Follow
+it step by step. Do not summarize, skip, reorder, or shortcut its steps.
+
+If the skill says to use AskUserQuestion, do that. Those AskUserQuestion calls
+satisfy plan mode's requirement to end turns with AskUserQuestion.
+
+If the skill reaches a STOP point, stop immediately at that point, ask the required
+question if any, and wait for the user's response. Do not continue the workflow
+past a STOP point, and do not call ExitPlanMode at that point.
+
+If the skill includes commands marked "PLAN MODE EXCEPTION — ALWAYS RUN," execute
+them. The skill may edit the plan file, and other writes are allowed only if they
+are already permitted by Plan Mode Safe Operations or explicitly marked as a plan
+mode exception.
+
+Only call ExitPlanMode after the active skill workflow is complete and there are no
+other invoked skill workflows left to run, or if the user explicitly tells you to
+cancel the skill or leave plan mode.
+
 ## Plan Status Footer
 
 When you are in plan mode and about to call ExitPlanMode:
@@ -339,6 +373,7 @@ Then write a `## GSTACK REVIEW REPORT` section to the end of the plan file:
 | Codex Review | \`/codex review\` | Independent 2nd opinion | 0 | — | — |
 | Eng Review | \`/plan-eng-review\` | Architecture & tests (required) | 0 | — | — |
 | Design Review | \`/plan-design-review\` | UI/UX gaps | 0 | — | — |
+| DX Review | \`/plan-devex-review\` | Developer experience gaps | 0 | — | — |
 
 **VERDICT:** NO REVIEWS YET — run \`/autoplan\` for full review pipeline, or individual reviews above.
 \`\`\`

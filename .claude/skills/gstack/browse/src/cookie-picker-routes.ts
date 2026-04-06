@@ -81,14 +81,13 @@ export async function handleCookiePickerRoute(
     }
 
     // ─── Auth gate: all data/action routes below require Bearer token ───
-    if (authToken) {
-      const authHeader = req.headers.get('authorization');
-      if (!authHeader || authHeader !== `Bearer ${authToken}`) {
-        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
+    // Auth is mandatory — if authToken is undefined, reject all requests
+    const authHeader = req.headers.get('authorization');
+    if (!authToken || !authHeader || authHeader !== `Bearer ${authToken}`) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     // GET /cookie-picker/browsers — list installed browsers

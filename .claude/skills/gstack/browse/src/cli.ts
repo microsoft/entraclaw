@@ -330,12 +330,21 @@ async function ensureServer(): Promise<ServerState> {
     return state;
   }
 
+  // BROWSE_NO_AUTOSTART: sidebar agent sets this so the child claude never
+  // spawns an invisible headless browser. If the headed server is down,
+  // fail fast with a clear error instead of silently starting a new one.
+  if (process.env.BROWSE_NO_AUTOSTART === '1') {
+    console.error('[browse] Server not available and BROWSE_NO_AUTOSTART is set.');
+    console.error('[browse] The headed browser may have been closed. Run /open-gstack-browser to restart.');
+    process.exit(1);
+  }
+
   // Guard: never silently replace a headed server with a headless one.
   // Headed mode means a user-visible Chrome window is (or was) controlled.
   // Silently replacing it would be confusing — tell the user to reconnect.
   if (state && state.mode === 'headed' && isProcessAlive(state.pid)) {
     console.error(`[browse] Headed server running (PID ${state.pid}) but not responding.`);
-    console.error(`[browse] Run '$B connect' to restart.`);
+    console.error(`[browse] Run '/open-gstack-browser' to restart.`);
     process.exit(1);
   }
 

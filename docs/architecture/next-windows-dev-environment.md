@@ -26,6 +26,9 @@ Create an app registration for the Openclaw agent:
 
 ```bash
 # Create the app registration
+# ⚠️ VERIFY GUIDS FIRST: run this to confirm permission IDs are correct:
+#   az ad sp show --id 00000003-0000-0000-c000-000000000000 \
+#     --query "oauth2PermissionScopes[?value=='Chat.Create' || value=='ChatMessage.Send' || value=='Chat.ReadWrite' || value=='User.Read' || value=='Presence.ReadWrite'].{name:value, id:id}" -o table
 az ad app create \
   --display-name "Openclaw Agent" \
   --sign-in-audience "AzureADMyOrg" \
@@ -57,6 +60,8 @@ Generate a client secret (for OBO exchange):
 ```bash
 az ad app credential reset --id <app-id> --display-name "Openclaw MVP"
 # SAVE the password — this is the client secret for ConfidentialClientApplication
+# ⚠️ MVP ONLY — production must use split architecture or certificate auth.
+#    The client secret on a device is a crown-jewel credential (see proposals.md Risk #1).
 ```
 
 ### 3. Agent ID Blueprint (Entra GA API)
@@ -96,6 +101,8 @@ az vm create \
   --size "Standard_D4s_v5" \
   --admin-username $ADMIN_USER \
   --admin-password "$(openssl rand -base64 16)!" \
+  # ⚠️ NOTE: This password is ephemeral — save it to a Key Vault or file if you need
+  # local admin fallback. Primary auth is via Entra join (AAD login extension below).
   --public-ip-sku Standard \
   --nsg-rule RDP
 

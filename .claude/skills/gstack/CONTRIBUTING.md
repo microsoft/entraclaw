@@ -40,8 +40,8 @@ No setup needed. Learnings are logged automatically. View them with `/learn`.
    ln -sfn /path/to/your/gstack-fork .claude/skills/gstack
    cd .claude/skills/gstack && bun install && bun run build && ./setup
    ```
-   Setup creates the per-skill symlinks (`qa -> gstack/qa`, etc.) and asks your
-   prefix preference. Pass `--no-prefix` to skip the prompt and use short names.
+   Setup creates per-skill directories with SKILL.md symlinks inside (`qa/SKILL.md -> gstack/qa/SKILL.md`)
+   and asks your prefix preference. Pass `--no-prefix` to skip the prompt and use short names.
 5. **Fix the issue** — your changes are live immediately in this project
 6. **Test by actually using gstack** — do the thing that annoyed you, verify it's fixed
 7. **Open a PR from your fork**
@@ -64,9 +64,11 @@ your local edits instead of the global install.
 gstack/                          <- your working tree
 ├── .claude/skills/              <- created by dev-setup (gitignored)
 │   ├── gstack -> ../../         <- symlink back to repo root
-│   ├── review -> gstack/review  <- short names (default)
-│   ├── ship -> gstack/ship      <- or gstack-review, gstack-ship if --prefix
-│   └── ...                      <- one symlink per skill
+│   ├── review/                  <- real directory (short name, default)
+│   │   └── SKILL.md -> gstack/review/SKILL.md
+│   ├── ship/                    <- or gstack-review/, gstack-ship/ if --prefix
+│   │   └── SKILL.md -> gstack/ship/SKILL.md
+│   └── ...                      <- one directory per skill
 ├── review/
 │   └── SKILL.md                 <- edit this, test with /review
 ├── ship/
@@ -77,7 +79,9 @@ gstack/                          <- your working tree
 └── ...
 ```
 
-Skill symlink names depend on your prefix setting (`~/.gstack/config.yaml`).
+Setup creates real directories (not symlinks) at the top level with a SKILL.md
+symlink inside. This ensures Claude discovers them as top-level skills, not nested
+under `gstack/`. Names depend on your prefix setting (`~/.gstack/config.yaml`).
 Short names (`/review`, `/ship`) are the default. Run `./setup --prefix` if you
 prefer namespaced names (`/gstack-review`, `/gstack-ship`).
 
@@ -212,11 +216,10 @@ SKILL.md files are **generated** from `.tmpl` templates. Don't edit the `.md` di
 # 1. Edit the template
 vim SKILL.md.tmpl              # or browse/SKILL.md.tmpl
 
-# 2. Regenerate for both hosts
-bun run gen:skill-docs
-bun run gen:skill-docs --host codex
+# 2. Regenerate for all hosts
+bun run gen:skill-docs --host all
 
-# 3. Check health (reports both Claude and Codex)
+# 3. Check health (reports all hosts)
 bun run skill:check
 
 # Or use watch mode — auto-regenerates on save
@@ -227,59 +230,74 @@ For template authoring best practices (natural language over bash-isms, dynamic 
 
 To add a browse command, add it to `browse/src/commands.ts`. To add a snapshot flag, add it to `SNAPSHOT_FLAGS` in `browse/src/snapshot.ts`. Then rebuild.
 
-## Dual-host development (Claude + Codex)
+## Multi-host development
 
-gstack generates SKILL.md files for two hosts: **Claude** (`.claude/skills/`) and **Codex** (`.agents/skills/`). Every template change needs to be generated for both.
+gstack generates SKILL.md files for 8 hosts from one set of `.tmpl` templates.
+Each host is a typed config in `hosts/*.ts`. The generator reads these configs
+to produce host-appropriate output (different frontmatter, paths, tool names).
 
-### Generating for both hosts
+**Supported hosts:** Claude (primary), Codex, Factory, Kiro, OpenCode, Slate, Cursor, OpenClaw.
+
+### Generating for all hosts
 
 ```bash
-# Generate Claude output (default)
-bun run gen:skill-docs
+# Generate for a specific host
+bun run gen:skill-docs                    # Claude (default)
+bun run gen:skill-docs --host codex       # Codex
+bun run gen:skill-docs --host opencode    # OpenCode
+bun run gen:skill-docs --host all         # All 8 hosts
 
-# Generate Codex output
-bun run gen:skill-docs --host codex
-# --host agents is an alias for --host codex
-
-# Or use build, which does both + compiles binaries
+# Or use build, which does all hosts + compiles binaries
 bun run build
 ```
 
 ### What changes between hosts
 
-| Aspect | Claude | Codex |
-|--------|--------|-------|
-| Output directory | `{skill}/SKILL.md` | `.agents/skills/gstack-{skill}/SKILL.md` (generated at setup, gitignored) |
-| Frontmatter | Full (name, description, allowed-tools, hooks, version) | Minimal (name + description only) |
-| Paths | `~/.claude/skills/gstack` | `$GSTACK_ROOT` (`.agents/skills/gstack` in a repo, otherwise `~/.codex/skills/gstack`) |
-| Hook skills | `hooks:` frontmatter (enforced by Claude) | Inline safety advisory prose (advisory only) |
-| `/codex` skill | Included (Claude wraps codex exec) | Excluded (self-referential) |
+Each host config (`hosts/*.ts`) controls:
 
-### Testing Codex output
+| Aspect | Example (Claude vs Codex) |
+|--------|---------------------------|
+| Output directory | `{skill}/SKILL.md` vs `.agents/skills/gstack-{skill}/SKILL.md` |
+| Frontmatter | Full (name, description, hooks, version) vs minimal (name + description) |
+| Paths | `~/.claude/skills/gstack` vs `$GSTACK_ROOT` |
+| Tool names | "use the Bash tool" vs same (Factory rewrites to "run this command") |
+| Hook skills | `hooks:` frontmatter vs inline safety advisory prose |
+| Suppressed sections | None vs Codex self-invocation sections stripped |
+
+See `scripts/host-config.ts` for the full `HostConfig` interface.
+
+### Testing host output
 
 ```bash
-# Run all static tests (includes Codex validation)
+# Run all static tests (includes parameterized smoke tests for all hosts)
 bun test
 
-# Check freshness for both hosts
-bun run gen:skill-docs --dry-run
-bun run gen:skill-docs --host codex --dry-run
+# Check freshness for all hosts
+bun run gen:skill-docs --host all --dry-run
 
-# Health dashboard covers both hosts
+# Health dashboard covers all hosts
 bun run skill:check
 ```
 
-### Dev setup for .agents/
+### Adding a new host
 
-When you run `bin/dev-setup`, it creates symlinks in both `.claude/skills/` and `.agents/skills/` (if applicable), so Codex-compatible agents can discover your dev skills too. The `.agents/` directory is generated at setup time from `.tmpl` templates — it is gitignored and not committed.
+See [docs/ADDING_A_HOST.md](docs/ADDING_A_HOST.md) for the full guide. Short version:
+
+1. Create `hosts/myhost.ts` (copy from `hosts/opencode.ts`)
+2. Add to `hosts/index.ts`
+3. Add `.myhost/` to `.gitignore`
+4. Run `bun run gen:skill-docs --host myhost`
+5. Run `bun test` (parameterized tests auto-cover it)
+
+Zero generator, setup, or tooling code changes needed.
 
 ### Adding a new skill
 
-When you add a new skill template, both hosts get it automatically:
+When you add a new skill template, all hosts get it automatically:
 1. Create `{skill}/SKILL.md.tmpl`
-2. Run `bun run gen:skill-docs` (Claude output) and `bun run gen:skill-docs --host codex` (Codex output)
-3. The dynamic template discovery picks it up — no static list to update
-4. Commit `{skill}/SKILL.md` — `.agents/` is generated at setup time and gitignored
+2. Run `bun run gen:skill-docs --host all`
+3. The dynamic template discovery picks it up, no static list to update
+4. Commit `{skill}/SKILL.md`, external host output is generated at setup time and gitignored
 
 ## Conductor workspaces
 
@@ -320,7 +338,7 @@ ln -sfn /path/to/your/gstack-checkout .claude/skills/gstack
 ### Step 2: Run setup to create per-skill symlinks
 
 The `gstack` symlink alone isn't enough. Claude Code discovers skills through
-individual symlinks (`qa -> gstack/qa`, `ship -> gstack/ship`, etc.), not through
+individual top-level directories (`qa/SKILL.md`, `ship/SKILL.md`, etc.), not through
 the `gstack/` directory itself. Run `./setup` to create them:
 
 ```bash
@@ -344,8 +362,8 @@ Remove the project-local symlink. Claude Code falls back to `~/.claude/skills/gs
 rm .claude/skills/gstack
 ```
 
-The per-skill symlinks (`qa`, `ship`, etc.) still point to `gstack/...`, so they'll
-resolve to the global install automatically.
+The per-skill directories (`qa/`, `ship/`, etc.) contain SKILL.md symlinks that point
+to `gstack/...`, so they'll resolve to the global install automatically.
 
 ### Switching prefix mode
 
@@ -387,6 +405,56 @@ When community PRs accumulate, batch them into themed waves:
    in merge commits. Include a summary table of what merged and what closed.
 
 See [PR #205](../../pull/205) (v0.8.3) for the first wave as an example.
+
+## Upgrade migrations
+
+When a release changes on-disk state (directory structure, config format, stale
+files) in ways that `./setup` alone can't fix, add a migration script so existing
+users get a clean upgrade.
+
+### When to add a migration
+
+- Changed how skill directories are created (symlinks vs real dirs)
+- Renamed or moved config keys in `~/.gstack/config.yaml`
+- Need to delete orphaned files from a previous version
+- Changed the format of `~/.gstack/` state files
+
+Don't add a migration for: new features (users get them automatically), new
+skills (setup discovers them), or code-only changes (no on-disk state).
+
+### How to add one
+
+1. Create `gstack-upgrade/migrations/v{VERSION}.sh` where `{VERSION}` matches
+   the VERSION file for the release that needs the fix.
+2. Make it executable: `chmod +x gstack-upgrade/migrations/v{VERSION}.sh`
+3. The script must be **idempotent** (safe to run multiple times) and
+   **non-fatal** (failures are logged but don't block the upgrade).
+4. Include a comment block at the top explaining what changed, why the
+   migration is needed, and which users are affected.
+
+Example:
+
+```bash
+#!/usr/bin/env bash
+# Migration: v0.15.2.0 — Fix skill directory structure
+# Affected: users who installed with --no-prefix before v0.15.2.0
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+"$SCRIPT_DIR/bin/gstack-relink" 2>/dev/null || true
+```
+
+### How it runs
+
+During `/gstack-upgrade`, after `./setup` completes (Step 4.75), the upgrade
+skill scans `gstack-upgrade/migrations/` and runs every `v*.sh` script whose
+version is newer than the user's old version. Scripts run in version order.
+Failures are logged but never block the upgrade.
+
+### Testing migrations
+
+Migrations are tested as part of `bun test` (tier 1, free). The test suite
+verifies that all migration scripts in `gstack-upgrade/migrations/` are
+executable and parse without syntax errors.
 
 ## Shipping your changes
 

@@ -1,5 +1,212 @@
 # Changelog
 
+## [0.15.11.0] - 2026-04-05
+
+### Changed
+- `/ship` re-runs now execute every verification step (tests, coverage audit, review, adversarial, TODOS, document-release) regardless of prior runs. Only actions (push, PR creation, VERSION bump) are idempotent. Re-running `/ship` means "run the whole checklist again."
+- `/ship` now runs the full Review Army specialist dispatch (testing, maintainability, security, performance, data-migration, api-contract, design, red-team) during pre-landing review, matching `/review`'s depth.
+
+### Added
+- Cross-review finding dedup in `/ship`: findings the user already skipped in a prior `/review` or `/ship` are automatically suppressed on re-run (unless the relevant code changed).
+- PR body refresh after `/document-release`: the PR body is re-edited to include the docs commit, so it always reflects the truly final state.
+
+### Fixed
+- Review Army diff size heuristic now counts insertions + deletions (was insertions-only, which missed deletion-heavy refactors).
+
+### For contributors
+- Extracted cross-review dedup to shared `{{CROSS_REVIEW_DEDUP}}` resolver (DRY between `/review` and `/ship`).
+- Review Army step numbers adapt per-skill via `ctx.skillName` (ship: 3.55/3.56, review: 4.5/4.6), including prose references.
+- Added 3 regression guard tests for new ship template content.
+
+## [0.15.10.0] - 2026-04-05 — Native OpenClaw Skills + ClawHub Publishing
+
+Four methodology skills you can install directly in your OpenClaw agent via ClawHub, no Claude Code session needed. Your agent runs them conversationally via Telegram.
+
+### Added
+
+- **4 native OpenClaw skills on ClawHub.** Install with `clawhub install gstack-openclaw-office-hours gstack-openclaw-ceo-review gstack-openclaw-investigate gstack-openclaw-retro`. Pure methodology, no gstack infrastructure. Office hours (375 lines), CEO review (193), investigate (136), retro (301).
+- **AGENTS.md dispatch fix.** Three behavioral rules that stop Wintermute from telling you to open Claude Code manually. It now spawns sessions itself. Ready-to-paste section at `openclaw/agents-gstack-section.md`.
+
+### Changed
+
+- OpenClaw `includeSkills` cleared. Native ClawHub skills replace the bloated generated versions (was 10-25K tokens each, now 136-375 lines of pure methodology).
+- docs/OPENCLAW.md updated with dispatch routing rules and ClawHub install references.
+
+## [0.15.9.0] - 2026-04-05 — OpenClaw Integration v2
+
+You can now connect gstack to OpenClaw as a methodology source. OpenClaw spawns Claude Code sessions natively via ACP, and gstack provides the planning discipline and thinking frameworks that make those sessions better.
+
+### Added
+
+- **gstack-lite planning discipline.** A 15-line CLAUDE.md that turns every spawned Claude Code session into a disciplined builder: read first, plan, resolve ambiguity, self-review, report. A/B tested: 2x time, meaningfully better output.
+- **gstack-full pipeline template.** For complete feature builds, chains /autoplan, implement, and /ship into one autonomous flow. Your orchestrator drops a task, gets back a PR.
+- **4 native methodology skills for OpenClaw.** Office hours, CEO review, investigate, and retro, adapted for conversational work that doesn't need a coding environment.
+- **4-tier dispatch routing.** Simple (no gstack), Medium (gstack-lite), Heavy (specific skill), Full (complete pipeline). Documented in docs/OPENCLAW.md with routing guide for OpenClaw's AGENTS.md.
+- **Spawned session detection.** Set OPENCLAW_SESSION env var and gstack auto-skips interactive prompts, focusing on task completion. Works for any orchestrator, not just OpenClaw.
+- **includeSkills host config field.** Union logic with skipSkills (include minus skip). Lets hosts generate only the skills they need instead of everything-minus-a-list.
+- **docs/OPENCLAW.md.** Full architecture doc explaining how gstack integrates with OpenClaw, the prompt-as-bridge model, and what we're NOT building (no daemon, no protocol, no Clawvisor).
+
+### Changed
+
+- OpenClaw host config updated: generates only 4 native skills instead of all 31. Removed staticFiles.SOUL.md (referenced non-existent file).
+- Setup script now prints redirect message for `--host openclaw` instead of attempting full installation.
+
+## [0.15.8.1] - 2026-04-05 — Community PR Triage + Error Polish
+
+Closed 12 redundant community PRs, merged 2 ready PRs (#798, #776), and expanded the friendly OpenAI error to every design command. If your org isn't verified, you now get a clear message with the right URL instead of a raw JSON dump, no matter which design command you run.
+
+### Fixed
+
+- **Friendly OpenAI org error on all design commands.** Previously only `$D generate` showed a user-friendly message when your org wasn't verified. Now `$D evolve`, `$D iterate`, `$D variants`, and `$D check` all show the same clear message with the verification URL.
+
+### Added
+
+- **>128KB regression test for Codex session discovery.** Documents the current buffer limitation so future Codex versions with larger session_meta will surface cleanly instead of silently breaking.
+
+### For contributors
+
+- Closed 12 redundant community PRs (6 Gonzih security fixes shipped in v0.15.7.0, 6 stedfn duplicates). Kept #752 open (symlink gap in design serve). Thank you @Gonzih, @stedfn, @itstimwhite for the contributions.
+
+## [0.15.8.0] - 2026-04-04 — Smarter Reviews
+
+Code reviews now learn from your decisions. Skip a finding once and it stays quiet until the code changes. Specialists auto-suggest test stubs alongside their findings. And silent specialists that never find anything get auto-gated so reviews stay fast.
+
+### Added
+
+- **Cross-review finding dedup.** When you skip a finding in one review, gstack remembers. On the next review, if the relevant code hasn't changed, the finding stays suppressed. No more re-skipping the same intentional pattern every PR.
+- **Test stub suggestions.** Specialists can now include a skeleton test alongside each finding. The test uses your project's detected framework (Jest, Vitest, RSpec, pytest, Go test). Findings with test stubs get surfaced as ASK items so you decide whether to create the test.
+- **Adaptive specialist gating.** Specialists that have been dispatched 10+ times with zero findings get auto-gated. Security and data-migration are exempt (insurance policies always run). Force any specialist back with `--security`, `--performance`, etc.
+- **Per-specialist stats in review log.** Every review now records which specialists ran, how many findings each produced, and which were skipped or gated. This powers the adaptive gating and gives /retro richer data.
+
+## [0.15.7.0] - 2026-04-05 — Security Wave 1
+
+Fourteen fixes for the security audit (#783). Design server no longer binds all interfaces. Path traversal, auth bypass, CORS wildcard, world-readable files, prompt injection, and symlink race conditions all closed. Community PRs from @Gonzih and @garagon included.
+
+### Fixed
+
+- **Design server binds localhost only.** Previously bound 0.0.0.0, meaning anyone on your WiFi could access mockups and hit all endpoints. Now 127.0.0.1 only, matching the browse server.
+- **Path traversal on /api/reload blocked.** Could previously read any file on disk (including ~/.ssh/id_rsa) by passing an arbitrary path in the JSON body. Now validates paths stay within cwd or tmpdir.
+- **Auth gate on /inspector/events.** SSE endpoint was unauthenticated while /activity/stream required tokens. Now both require the same Bearer or ?token= check.
+- **Prompt injection defense in design feedback.** User feedback is now wrapped in XML trust boundary markers with tag escaping. Accumulated feedback capped to last 5 iterations to limit poisoning.
+- **File and directory permissions hardened.** All ~/.gstack/ dirs now created with mode 0o700, files with 0o600. Setup script sets umask 077. Auth tokens, chat history, and browser logs no longer world-readable.
+- **TOCTOU race in setup symlink creation.** Removed existence check before mkdir -p (idempotent). Validates target isn't a symlink before creating the link.
+- **CORS wildcard removed.** Browse server no longer sends Access-Control-Allow-Origin: *. Chrome extension uses manifest host_permissions and isn't affected. Blocks malicious websites from making cross-origin requests.
+- **Cookie picker auth mandatory.** Previously skipped auth when authToken was undefined. Now always requires Bearer token for all data/action routes.
+- **/health token gated on extension Origin.** Auth token only returned when request comes from chrome-extension:// origin. Prevents token leak when browse server is tunneled.
+- **DNS rebinding protection checks IPv6.** AAAA records now validated alongside A records. Blocks fe80:: link-local addresses.
+- **Symlink bypass in validateOutputPath.** Real path resolved after lexical validation to catch symlinks inside safe directories.
+- **URL validation on restoreState.** Saved URLs validated before navigation to prevent state file tampering.
+- **Telemetry endpoint uses anon key.** Service role key (bypasses RLS) replaced with anon key for the public telemetry endpoint.
+- **killAgent actually kills subprocess.** Cross-process kill signaling via kill-file + polling.
+
+## [0.15.6.2] - 2026-04-04 — Anti-Skip Review Rule
+
+Review skills now enforce that every section gets evaluated, regardless of plan type. No more "this is a strategy doc so implementation sections don't apply." If a section genuinely has nothing to flag, say so and move on, but you have to look.
+
+### Added
+
+- **Anti-skip rule in all 4 review skills.** CEO review (sections 1-11), eng review (sections 1-4), design review (passes 1-7), and DX review (passes 1-8) all now require explicit evaluation of every section. Models can no longer skip sections by claiming the plan type makes them irrelevant.
+- **CEO review header fix.** Corrected "10 sections" to "11 sections" to match the actual section count (Section 11 is conditional but exists).
+
+## [0.15.6.1] - 2026-04-04
+
+### Fixed
+
+- **Skill prefix self-healing.** Setup now runs `gstack-relink` as a final consistency check after linking skills. If an interrupted setup, stale git state, or upgrade left your `name:` fields out of sync with `skill_prefix: false`, setup will auto-correct on the next run. No more `/gstack-qa` when you wanted `/qa`.
+
+## [0.15.6.0] - 2026-04-04 — Declarative Multi-Host Platform
+
+Adding a new coding agent to gstack used to mean touching 9 files and knowing the internals of `gen-skill-docs.ts`. Now it's one TypeScript config file and a re-export. Zero code changes elsewhere. Tests auto-parameterize.
+
+### Added
+
+- **Declarative host config system.** Every host is a typed `HostConfig` object in `hosts/*.ts`. The generator, setup, skill-check, platform-detect, uninstall, and worktree copy all consume configs instead of hardcoded switch statements. Adding a host = one file + re-export in `hosts/index.ts`.
+- **4 new hosts: OpenCode, Slate, Cursor, OpenClaw.** `bun run gen:skill-docs --host all` now generates for 8 hosts. Each produces valid SKILL.md output with zero `.claude/skills` path leakage.
+- **OpenClaw adapter.** OpenClaw gets a hybrid approach: config for paths/frontmatter/detection + a post-processing adapter for semantic tool mapping (Bash→exec, Agent→sessions_spawn, AskUserQuestion→prose). Includes `SOUL.md` via `staticFiles` config.
+- **106 new tests.** 71 tests for config validation, HOST_PATHS derivation, export CLI, golden-file regression, and per-host correctness. 35 parameterized smoke tests covering all 7 external hosts (output exists, no path leakage, frontmatter valid, freshness, skip rules).
+- **`host-config-export.ts` CLI.** Exposes host configs to bash scripts via `list`, `get`, `detect`, `validate`, `symlinks` commands. No YAML parsing needed in bash.
+- **Contributor `/gstack-contrib-add-host` skill.** Guides new host config creation. Lives in `contrib/`, excluded from user installs.
+- **Golden-file baselines.** Snapshots of ship/SKILL.md for Claude, Codex, and Factory verify the refactor produces identical output.
+- **Per-host install instructions in README.** Every supported agent has its own copy-paste install block.
+
+### Changed
+
+- **`gen-skill-docs.ts` is now config-driven.** EXTERNAL_HOST_CONFIG, transformFrontmatter host branches, path/tool rewrite if-chains, ALL_HOSTS array, and skill skip logic all replaced with config lookups.
+- **`types.ts` derives Host type from configs.** No more hardcoded `'claude' | 'codex' | 'factory'`. HOST_PATHS built dynamically from each config's globalRoot/usesEnvVars.
+- **Preamble, co-author trailer, resolver suppression all read from config.** hostConfigDir, co-author strings, and suppressedResolvers driven by host configs instead of per-host switch statements.
+- **`skill-check.ts`, `worktree.ts`, `platform-detect` iterate configs.** No per-host blocks to maintain.
+
+### Fixed
+
+- **Sidebar E2E tests now self-contained.** Fixed stale URL assertion in sidebar-url-accuracy, simplified sidebar-css-interaction task. All 3 sidebar tests pass without external browser dependencies.
+
+## [0.15.5.0] - 2026-04-04 — Interactive DX Review + Plan Mode Skill Fix
+
+`/plan-devex-review` now feels like sitting down with a developer advocate who has used 100 CLI tools. Instead of speed-running 8 scores, it asks who your developer is, benchmarks you against competitors' onboarding times, makes you design your magical moment, and traces every friction point step by step before scoring anything.
+
+### Added
+
+- **Developer persona interrogation.** The review starts by asking WHO your developer is, with concrete archetypes (YC founder, platform engineer, frontend dev, OSS contributor). The persona shapes every question for the rest of the review.
+- **Empathy narrative as conversation starter.** A first-person "I'm a developer who just found your tool..." walkthrough gets shown to you for reaction before any scoring begins. You correct it, and the corrected version goes into the plan.
+- **Competitive DX benchmarking.** WebSearch finds your competitors' TTHW and onboarding approaches. You pick your target tier (Champion < 2min, Competitive 2-5min, or current trajectory). That target follows you through every pass.
+- **Magical moment design.** You choose how developers should experience the "oh wow" moment: playground, demo command, video, or guided tutorial, with effort/tradeoff analysis.
+- **Three review modes.** DX EXPANSION (push for best-in-class), DX POLISH (bulletproof every touchpoint), DX TRIAGE (critical gaps only, ship soon).
+- **Friction-point journey tracing.** Instead of a static table, the review traces actual README/docs paths and asks one AskUserQuestion per friction point found.
+- **First-time developer roleplay.** A timestamped confusion report from your persona's perspective, grounded in actual docs and code.
+
+### Fixed
+
+- **Skill invocation during plan mode.** When you invoke a skill (like `/plan-ceo-review`) during plan mode, Claude now treats it as executable instructions instead of ignoring it and trying to exit. The loaded skill takes precedence over generic plan mode behavior. STOP points actually stop. This fix ships in every skill's preamble.
+
+## [0.15.4.0] - 2026-04-03 — Autoplan DX Integration + Docs
+
+`/autoplan` now auto-detects developer-facing plans and runs `/plan-devex-review` as Phase 3.5, with full dual-voice adversarial review (Claude subagent + Codex). If your plan mentions APIs, CLIs, SDKs, agent actions, or anything developers integrate with, the DX review kicks in automatically. No extra commands needed.
+
+### Added
+
+- **DX review in /autoplan.** Phase 3.5 runs after Eng review when developer-facing scope is detected. Includes DX-specific dual voices, consensus table, and full 8-dimension scorecard. Triggers on APIs, CLIs, SDKs, shell commands, Claude Code skills, OpenClaw actions, MCP servers, and anything devs implement or debug.
+- **"Which review?" comparison table in README.** Quick reference showing which review to use for end users vs developers vs architecture, and when `/autoplan` covers all three.
+- **`/plan-devex-review` and `/devex-review` in install instructions.** Both skills now listed in the copy-paste install prompt so new users discover them immediately.
+
+### Changed
+
+- **Autoplan pipeline order.** Now CEO → Design → Eng → DX (was CEO → Design → Eng). DX runs last because it benefits from knowing the architecture.
+
+## [0.15.3.0] - 2026-04-03 — Developer Experience Review
+
+You can now review plans for DX quality before writing code. `/plan-devex-review` rates 8 dimensions (getting started, API design, error messages, docs, upgrade path, dev environment, community, measurement) on a 0-10 scale with trend tracking across reviews. After shipping, `/devex-review` uses the browse tool to actually test the live experience and compare against plan-stage scores.
+
+### Added
+
+- **/plan-devex-review skill.** Plan-stage DX review based on Addy Osmani's framework. Auto-detects product type (API, CLI, SDK, library, platform, docs, Claude Code skill). Includes developer empathy simulation, DX scorecard with trends, and a conditional Claude Code Skill DX checklist for reviewing skills themselves.
+- **/devex-review skill.** Live DX audit using the browse tool. Tests docs, getting started flows, error messages, and CLI help. Each dimension scored as TESTED, INFERRED, or N/A with screenshot evidence. Boomerang comparison: plan said TTHW would be 3 minutes, reality says 8.
+- **DX Hall of Fame reference.** On-demand examples from Stripe, Vercel, Elm, Rust, htmx, Tailwind, and more, loaded per review pass to avoid prompt bloat.
+- **`{{DX_FRAMEWORK}}` resolver.** Shared DX principles, characteristics, and scoring rubric for both skills. Compact (~150 lines) so it doesn't eat context.
+- **DX Review in the dashboard.** Both skills write to the review log and show up in the Review Readiness Dashboard alongside CEO, Eng, and Design reviews.
+
+## [0.15.2.1] - 2026-04-02 — Setup Runs Migrations
+
+`git pull && ./setup` now applies version migrations automatically. Previously, migrations only ran during `/gstack-upgrade`, so users who updated via git pull never got state fixes (like the skill directory restructure from v0.15.1.0). Now `./setup` tracks the last version it ran at and applies any pending migrations on every run.
+
+### Fixed
+
+- **Setup runs pending migrations.** `./setup` now checks `~/.gstack/.last-setup-version` and runs any migration scripts newer than that version. No more broken skill directories after `git pull`.
+- **Space-safe migration loop.** Uses `while read` instead of `for` loop to handle paths with spaces correctly.
+- **Fresh installs skip migrations.** New installs write the version marker without running historical migrations that don't apply to them.
+- **Future migration guard.** Migrations for versions newer than the current VERSION are skipped, preventing premature execution from development branches.
+- **Missing VERSION guard.** If the VERSION file is absent, the version marker isn't written, preventing permanent migration poisoning.
+
+## [0.15.2.0] - 2026-04-02 — Voice-Friendly Skill Triggers
+
+Say "run a security check" instead of remembering `/cso`. Skills now have voice-friendly trigger phrases that work with AquaVoice, Whisper, and other speech-to-text tools. No more fighting with acronyms that get transcribed wrong ("CSO" -> "CEO" -> wrong skill).
+
+### Added
+
+- **Voice triggers for 10 skills.** Each skill gets natural-language aliases baked into its description. "see-so", "security review", "tech review", "code x", "speed test" and more. The right skill activates even when speech-to-text mangles the command name.
+- **`voice-triggers:` YAML field in templates.** Structured authoring: add aliases to any `.tmpl` frontmatter, `gen-skill-docs` folds them into the description during generation. Clean source, clean output.
+- **Voice input section in README.** New users know skills work with voice from day one.
+- **`voice-triggers` documented in CONTRIBUTING.md.** Frontmatter contract updated so contributors know the field exists.
+
 ## [0.15.1.0] - 2026-04-01 — Design Without Shotgun
 
 You can now run `/design-html` without having to run `/design-shotgun` first. The skill detects what design context exists (CEO plans, design review artifacts, approved mockups) and asks how you want to proceed. Start from a plan, a description, or a provided PNG, not just an approved mockup.
@@ -8,6 +215,10 @@ You can now run `/design-html` without having to run `/design-shotgun` first. Th
 
 - **`/design-html` works from any starting point.** Three routing modes: (A) approved mockup from /design-shotgun, (B) CEO plan and/or design variants without formal approval, (C) clean slate with just a description. Each mode asks the right questions and proceeds accordingly.
 - **AskUserQuestion for missing context.** Instead of blocking with "no approved design found," the skill now offers choices: run the planning skills first, provide a PNG, or just describe what you want and design live.
+
+### Fixed
+
+- **Skills now discovered as top-level names.** Setup creates real directories with SKILL.md symlinks inside instead of directory symlinks. This fixes Claude auto-prefixing skill names with `gstack-` when using `--no-prefix` mode. `/qa` is now just `/qa`, not `/gstack-qa`.
 
 ## [0.15.0.0] - 2026-04-01 — Session Intelligence
 

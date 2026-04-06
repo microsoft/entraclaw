@@ -9,6 +9,10 @@ description: |
   "review the architecture", "engineering review", or "lock in the plan".
   Proactively suggest when the user has a plan or design doc and is about to
   start coding — to catch architecture issues before implementation. (gstack)
+voice-triggers:
+  - "tech review"
+  - "technical review"
+  - "plan engineering review"
 benefits-from: [office-hours]
 allowed-tools:
   - Read
@@ -109,6 +113,8 @@ Always work through the full interactive review: one section at a time (Architec
 **Critical: Once the user accepts or rejects a scope reduction recommendation, commit fully.** Do not re-argue for smaller scope during later review sections. Do not silently reduce scope or skip planned components.
 
 ## Review Sections (after scope is agreed)
+
+**Anti-skip rule:** Never condense, abbreviate, or skip any review section (1-4) regardless of plan type (strategy, spec, code, infra). Every section in this skill exists for a reason. "This is a strategy doc so implementation sections don't apply" is always wrong — implementation details are where strategy breaks down. If a section genuinely has zero findings, say "No issues found" and move on — but you must evaluate it.
 
 {{LEARNINGS_SEARCH}}
 
