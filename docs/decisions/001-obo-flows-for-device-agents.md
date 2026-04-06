@@ -1,6 +1,6 @@
 # ADR-001: Use OBO Flows for Device-Local Agent Identity
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-002](002-agent-user-over-obo.md)
 **Date:** 2026-04-05
 
 ## Context

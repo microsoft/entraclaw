@@ -1,27 +1,28 @@
 # Openclaw Identity Research
 
-Openclaw brings cloud-style identity tracking to device-local agents. When an autonomous agent runs on your Mac, Linux, or Windows machine, it gets its own **Agent ID** and uses **on-behalf-of (OBO)** token flows — so audit logs always distinguish agent actions from human actions.
+Openclaw brings cloud-style identity tracking to device-local agents. When an autonomous agent runs on your Mac, Linux, or Windows machine, it gets its own **Agent ID** and **Agent User** in Microsoft Entra — so audit logs always distinguish agent actions from human actions.
 
 ## Key Concepts
 
 | Concept | What It Does |
 |---------|-------------|
-| **Agent ID** | A distinct identity for an autonomous agent, separate from the human user |
-| **OBO Flow** | Token exchange where the human consents and the agent gets an attributed token |
-| **Platform Abstraction** | OS-specific agent identity lifecycle (create, consent, acquire token, audit) |
-| **Digital Worker** | The agent's identity as seen in sign-in/access logs |
-| **Teams Agent User** | Bidirectional Teams channel — agent messages human, human steers agent |
+| **Agent Identity** | A service principal representing a specific agent instance, parented by a Blueprint |
+| **Agent User** | A purpose-built Entra user account (1:1 with an Agent Identity) that can have a mailbox, Teams presence, and M365 license |
+| **Three-Hop Flow** | Blueprint token → Agent Identity token (FIC) → Agent User token (`user_fic` grant) — fully autonomous, no human in the loop |
+| **Platform Abstraction** | OS-specific credential storage (Keychain, Credential Manager, Secret Service) |
+| **Digital Worker** | The agent as a first-class team member — mailbox, Teams, org chart, @mentionable |
 
 ## Where to Start
 
 - **New to the project?** Start with the [Quickstart](getting-started/quickstart.md)
 - **Understanding the design?** Read [System Overview](architecture/system-overview.md)
-- **How tokens flow?** See [OBO Token Flows](reference/obo-flows.md)
+- **How tokens flow?** See [Token Flows](reference/token-flows.md)
 - **Debugging?** Check [Hard-Won Learnings](runbooks/hard-won-learnings.md)
 - **Why we made a decision?** Browse [Architecture Decision Records](decisions/README.md)
+- **Agent User deep dive?** See [Platform Learnings: Agent Users](platform-learnings/entra-agent-users.md)
 
 ## Open Research Questions
 
-- What identity system replaces Live ID for agent-to-Teams auth at scale?
+- What M365 license tier is optimal for Agent Users? (E3 vs E5 vs Teams Enterprise)
 - How do you track agent actions across OSes with a universal audit store?
-- Teams Graph API coverage: what's missing vs. the Teams UX?
+- Conditional Access for Agent Identities — how does Layer 4 enforcement work device-locally?

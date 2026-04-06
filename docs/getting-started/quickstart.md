@@ -3,39 +3,61 @@
 ## Prerequisites
 
 - Python 3.12+
-- An Azure/Entra tenant with Agent ID support (for live token flows)
+- Azure CLI (`az`) logged in with admin access to your Entra tenant
 - Git
+- An M365 license available for the Agent User (E3/E5/Teams Enterprise)
 
-## Setup
+## One-Command Setup
 
 ```bash
-git clone <repo-url>
-cd openclaw-identity-research
-
-python -m venv .venv
-source .venv/bin/activate  # or .venv\Scripts\activate on Windows
-pip install -e ".[dev]"
+./scripts/setup.sh
 ```
 
-## First Run
+This will:
+1. Create a dedicated provisioner app registration (avoids Azure CLI token rejection)
+2. Create an Agent Identity Blueprint + BlueprintPrincipal
+3. Create an Agent Identity (per-device service principal)
+4. Create an Agent User (Entra user account linked to the Agent Identity)
+5. Grant consent for Teams/Chat Graph permissions
+6. Create a Blueprint client secret (for the three-hop token flow)
+7. Install Python dependencies and write `.env`
+
+The script is **idempotent** — safe to re-run. State is persisted in `.openclaw-state.json`.
+
+## After Setup
+
+1. **Assign an M365 license** to the Agent User in the Entra admin center (E3/E5/Teams Enterprise)
+2. **Wait 10-15 minutes** for Teams/mailbox provisioning
+3. **Run tests:**
 
 ```bash
-# Run the test suite to verify everything is wired correctly
+source .venv/bin/activate
+pytest -v --cov=openclaw --cov-report=term-missing
+```
+
+## Without an Entra Tenant
+
+If you just want to run the code and tests locally:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 pytest -v
 ```
 
-## Verify It Works
+All Graph API calls are mocked in tests — no tenant needed.
+
+## Teardown
 
 ```bash
-# Lint check
-ruff check .
-
-# Run a specific test
-pytest tests/test_foo.py::test_bar -v
+./scripts/teardown.sh
 ```
+
+Removes the Agent User, Agent Identity, Blueprint, Provisioner app, and all local state.
 
 ## Next Steps
 
-- Read the [System Overview](../architecture/system-overview.md) to understand how platform, auth, audit, and Teams fit together
-- Check the [OBO Token Flows](../reference/obo-flows.md) reference for auth protocol details
+- Read the [System Overview](../architecture/system-overview.md)
+- See [Token Flows](../reference/token-flows.md) for auth protocol details
 - See [Enforcement Flow](../architecture/enforcement-flow.md) for how a request moves through the system

@@ -1,10 +1,6 @@
 # Openclaw Identity Research
 
-> TSA bug filing file has been configured: [tsaoptions.json](.config/tsaoptions.json). Official builds are required to have TSA bug filing enabled by default. [Learn more](https://aka.ms/OBTSA)
-
-## Introduction
-
-Research project for securing agentic workflows on local devices (Mac/Linux/Windows) using Microsoft Entra Agent IDs and on-behalf-of (OBO) token flows. Agents get their own identity so audit logs always distinguish agent actions from human actions, and communicate bidirectionally with humans through Microsoft Teams.
+Research project for securing agentic workflows on local devices (Mac/Linux/Windows) using Microsoft Entra Agent IDs and Agent Users. Agents get their own identity — a real Entra user account with Teams presence, mailbox, and M365 license — so audit logs always distinguish agent actions from human actions.
 
 ## Getting Started
 
@@ -13,6 +9,7 @@ Research project for securing agentic workflows on local devices (Mac/Linux/Wind
 - Azure CLI (`az`) logged in with admin access to your Entra tenant
 - Python 3.12+
 - Git
+- An M365 license available for the Agent User (E3/E5/Teams Enterprise)
 
 ### One-Command Setup
 
@@ -22,20 +19,22 @@ Research project for securing agentic workflows on local devices (Mac/Linux/Wind
 
 This script will:
 
-1. Create an Entra app registration with the correct permissions
-2. Set up Graph API scopes for Teams integration
-3. Install Python dependencies
-4. Save configuration to `.env`
-5. Run tests to verify everything works
+1. Create a dedicated provisioner app registration (avoids Azure CLI token rejection)
+2. Create an Agent Identity Blueprint + BlueprintPrincipal + Agent Identity
+3. Create an Agent User (Entra user account linked to the Agent Identity)
+4. Grant consent for Teams/Chat Graph permissions
+5. Create a Blueprint client secret and write `.env`
 
-The script is **idempotent** — safe to re-run at any time. It detects existing resources and skips creation.
+The script is **idempotent** — safe to re-run. State persists in `.openclaw-state.json`.
+
+After setup, **assign an M365 license** (E3/E5/Teams Enterprise) to the Agent User in the Entra admin center and wait 10-15 minutes for Teams provisioning.
 
 ### Run the MCP Server
 
-After setup, add Openclaw to your Copilot CLI config:
+Add Openclaw to your Copilot CLI config:
 
 ```jsonc
-// Add to ~/.copilot/mcp-config.json
+// ~/.copilot/mcp-config.json
 {
   "mcpServers": {
     "openclaw": {
@@ -48,24 +47,22 @@ After setup, add Openclaw to your Copilot CLI config:
 }
 ```
 
-The server loads configuration from `.env` automatically.
-
 Then launch Copilot CLI:
 
 ```bash
 copilot
 ```
 
-And use the tools:
+Available tools:
 
-- `openclaw_bootstrap` — authenticate and get an agent identity
-- `openclaw_teams_connect` — connect to Teams
-- `openclaw_teams_send` — send a message
+- `openclaw_whoami` — show agent identity and connection status
+- `openclaw_teams_send` — send a message to the human as the Agent User
+- `openclaw_teams_read` — read recent messages from the human
 - `openclaw_audit_log` — record an audit event
 
-### Manual Setup (without Azure)
+### Without an Entra Tenant
 
-If you just want to run the code and tests without an Entra tenant:
+To run the code and tests locally without a tenant:
 
 ```bash
 python3.12 -m venv .venv
@@ -74,21 +71,67 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
-### Teardown
+All Graph API calls are mocked in tests.
 
-To remove the Entra app registration and all cached credentials:
+### Teardown
 
 ```bash
 ./scripts/teardown.sh
 ```
 
-### Software Dependencies
+Removes the Agent User, Agent Identity, Blueprint, Provisioner app, and all local state.
 
-- Python 3.12+
-- `msal` (Microsoft Authentication Library) for token flows
-- `pytest` for testing, `ruff` for linting
+## Architecture
 
-### Documentation
+The agent authenticates via the **three-hop Agent User flow** — fully autonomous, no human in the loop:
+
+```
+Blueprint (client_credentials)
+  → Agent Identity (FIC exchange)
+    → Agent User (user_fic grant, idtyp=user)
+      → Graph API: Teams, Mail, OneDrive
+```
+
+Four modules handle the agent identity lifecycle:
+
+- **platform/** — OS-specific credential storage (Keychain, Credential Manager, Secret Service)
+- **auth/** — Three-hop token exchange with Microsoft Entra
+- **audit/** — Action tracking — every resource access emits an audit event before executing
+- **teams/** — Teams messaging via Graph API as the Agent User identity
+
+## Build and Test (TDD)
+
+This project uses test-driven development. All new code requires a failing test before implementation.
+
+```bash
+# Run all tests
+pytest -v
+
+# Run with coverage (80% threshold enforced)
+pytest -v --cov=openclaw --cov-report=term-missing --cov-fail-under=80
+
+# Single test
+pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v
+
+# Lint + format
+ruff check . && ruff format .
+```
+
+Current status: **64 tests passing, 87% coverage**.
+
+## Repository Map
+
+| Directory | Purpose |
+|-----------|---------|
+| `src/openclaw/` | Application source code (18 modules) |
+| `tests/` | Test suite (mirrors `src/` structure) |
+| `scripts/` | Setup, teardown, and Entra provisioning scripts |
+| `docs/` | Documentation site (MkDocs Material) |
+| `docs/platform-learnings/` | Deep research on all integration platforms |
+| `docs/decisions/` | Architecture Decision Records |
+| `.github/` | CI workflows and Copilot instructions |
+
+## Documentation
 
 ```bash
 pip install mkdocs-material
@@ -96,44 +139,3 @@ mkdocs serve
 ```
 
 Open http://localhost:8000 — or see [docs/index.md](docs/index.md) for a reading guide.
-
-## Architecture
-
-Four modules handle the agent identity lifecycle on Mac/Linux/Windows:
-
-- **platform/** — OS-specific agent identity (keychain, credential storage, consent UX)
-- **auth/** — OBO token exchange with Microsoft Entra, Agent ID registration
-- **audit/** — Action tracking — every resource access emits an audit event before executing
-- **teams/** — Bidirectional Teams communication (agent ↔ human via Graph API)
-
-## Build and Test
-
-```bash
-# Run all tests
-pytest -v
-
-# Run a single test
-pytest tests/auth/test_obo.py::test_token_exchange -v
-
-# Lint
-ruff check .
-
-# Format
-ruff format .
-```
-
-## Repository Map
-
-| Directory | Purpose |
-|-----------|---------|
-| `src/openclaw/` | Application source code |
-| `tests/` | Test suite (mirrors `src/` structure) |
-| `docs/` | Documentation site (MkDocs Material) |
-| `docs/platform-learnings/` | Deep research on all integration platforms |
-| `docs/proposals.md` | Architecture proposals (9 proposals across 3 OSes) |
-| `scripts/` | Setup and teardown automation |
-| `.github/` | CI workflows and Copilot instructions |
-
-## Contribute
-
-See [owners.txt](owners.txt) for code owners. All changes to protected branches require approval from at least one listed owner.

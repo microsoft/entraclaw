@@ -2,41 +2,30 @@
 
 ## Purpose
 
-Handles all interactions with Microsoft Entra ID — Agent ID registration, OBO token exchange, consent management, and token lifecycle (refresh, revocation).
+Handles all interactions with Microsoft Entra ID — three-hop Agent User token acquisition, Agent ID registration, and token lifecycle.
 
-## Flows
+## Three-Hop Flow
 
-### 1. Agent ID Registration
+The auth layer implements the autonomous Agent User authentication:
 
-The agent registers itself with Entra to get a unique Agent ID. This is a one-time operation per agent instance.
+1. **Hop 1:** Blueprint → `client_credentials` → Blueprint token
+2. **Hop 2:** Agent Identity → FIC exchange (Blueprint token as assertion) → Agent Identity token
+3. **Hop 3:** Agent User → `user_fic` grant → delegated user token (`idtyp=user`)
 
-### 2. On-Behalf-Of (OBO) Token Exchange
+No human in the loop. No MSAL at runtime — uses raw `httpx` calls to the Entra token endpoint.
 
-The core flow. The human user's token is exchanged for an agent-attributed token:
+## Key Files
 
-```
-Human token (from device session)
-        │
-        ▼
-┌──────────────────┐
-│ MSAL OBO request │  assertion = human_token
-│ to Entra         │  scope = requested_resources
-└────────┬─────────┘
-         │
-         ▼
-Agent token (attributed to Agent ID, acting on behalf of human)
-```
+- `src/openclaw/tools/teams.py` — `acquire_agent_user_token()` implements the three-hop flow
+- `src/openclaw/config.py` — loads Blueprint credentials and Agent User IDs from `.env`
+- `src/openclaw/errors.py` — `TokenExchangeError` with hop identification for debugging
 
-The resulting token shows the **agent** as the actor in sign-in logs, with a reference back to the consenting human.
+## Error Handling
 
-### 3. Device Code Flow (Bootstrap)
+Every token response is checked for the `"error"` key before accessing `"access_token"`. The `TokenExchangeError` includes which hop failed (`hop1:blueprint`, `hop2:agent_identity`, `hop3:agent_user`) so you know exactly where the chain broke.
 
-For initial human sign-in when no interactive browser is available (e.g., headless Linux), the device code flow provides a code the user enters in a browser.
+## What Changed (from OBO)
 
-### 4. Client Credentials (Agent-Only)
+The previous design used MSAL's `PublicClientApplication` + `ConfidentialClientApplication` for device-code → OBO exchange. This was replaced because Agent Users authenticate autonomously — no human token needed. See [ADR-002](../../decisions/002-agent-user-over-obo.md).
 
-For operations where the agent acts under its own identity without human delegation. Limited scope — only for agent-to-agent or agent-to-infrastructure calls.
-
-## Key Rule
-
-**Never mix flow logic in a single function.** Each flow type gets its own module: `obo.py`, `device_code.py`, `client_credentials.py`.
+Removed: `msal` runtime dependency, `PublicClientApplication`, `ConfidentialClientApplication`, `acquire_token_on_behalf_of`, human refresh token caching, `access_as_user` custom scope.

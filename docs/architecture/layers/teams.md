@@ -2,33 +2,44 @@
 
 ## Purpose
 
-Enables bidirectional communication between the agent and the human user through Microsoft Teams. The agent connects as an "Agent User" — it can send messages to the human and receive commands back.
+Enables bidirectional communication between the agent and the human user through Microsoft Teams. The agent connects as its **Agent User** identity — a real Entra user with a Teams license, mailbox, and org chart presence.
 
-## Communication Model
+## How It Works
+
+The Agent User token (from the three-hop flow, `idtyp=user`) is used to call the Teams Graph API. Since the token has user context, `/me` resolves to the Agent User, and the agent appears as its own identity in Teams conversations.
+
+### Chat Creation
 
 ```
-┌──────────────┐        Teams Channel        ┌──────────────┐
-│              │  ──── status/results ────▶   │              │
-│    Agent     │                              │    Human     │
-│  (local)     │  ◀──── commands ────────     │  (Teams)     │
-│              │                              │              │
-└──────────────┘                              └──────────────┘
+POST /v1.0/chats
 ```
 
-This is analogous to `gh copilot --remote` — steering a local agent session through a remote UI.
+Creates a 1:1 chat between the Agent User (`/me`) and the human user. Idempotent — if the chat already exists, it's returned unchanged.
 
-## Identity Challenge
+### Send Message
 
-The agent needs a Teams-compatible identity. Current options:
+```
+POST /v1.0/chats/{chat-id}/messages
+```
 
-| Option | Pros | Cons |
-|--------|------|------|
-| Live ID | Existing infra | Nearly deprecated, doesn't scale |
-| Entra Agent ID as Teams user | Aligned with project goals | Teams Graph API support unclear |
-| Bot Framework registration | Well-supported | Different identity model, not OBO |
+Sends a message FROM the Agent User. The human sees it as a message from a distinct Teams identity, not from themselves.
 
-**Open question:** Which identity path lets the agent appear in Teams as a distinct "Agent User" while using the same OBO token chain?
+### Read Messages
 
-## Graph API Dependencies
+```
+GET /v1.0/chats/{chat-id}/messages?$top=N&$orderby=createdDateTime desc
+```
 
-The agent interacts with Teams via the Microsoft Graph API. Any gaps between what the Graph API supports and what the Teams UX can do should be documented and reported — Office is obligated to close those gaps within 30 days.
+Reads recent messages from the chat. The agent can check for human responses and act on them.
+
+## Prerequisites
+
+- Agent User must be created (via `create_entra_agent_ids.py`)
+- Agent User must have a Teams-capable M365 license (E3/E5/Teams Enterprise)
+- Teams provisioning must be complete (10-15 min after license assignment)
+- `oAuth2PermissionGrant` must exist for `Chat.Create Chat.ReadWrite ChatMessage.Send User.Read`
+
+## Key Files
+
+- `src/openclaw/tools/teams.py` — `acquire_agent_user_token()`, `create_or_find_chat()`, `send()`, `read()`
+- `tests/tools/test_teams.py` — 21 tests covering all three hops + Graph API calls
