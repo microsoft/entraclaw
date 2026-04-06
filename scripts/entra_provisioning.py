@@ -32,8 +32,10 @@ APP_READWRITE_ALL_ID = "1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9"
 
 BASE_PERMISSION_VALUES = [
     "Application.ReadWrite.All",
+    "DelegatedPermissionGrant.ReadWrite.All",
     "LicenseAssignment.ReadWrite.All",
     "Organization.Read.All",
+    "User.ReadWrite.All",
 ]
 
 AGENT_ID_PERMISSION_MATCHERS = [
