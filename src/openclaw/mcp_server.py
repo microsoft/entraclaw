@@ -1,9 +1,9 @@
 """Openclaw MCP server — pre-authenticated, simple tools.
 
 The server loads credentials from ``.env`` (written by ``scripts/setup.sh``),
-acquires an agent token via ROPC, and creates the Teams chat on startup.
-NO device-code flows.  NO app registration creation.  If authentication
-fails, the server prints an error and exits.
+acquires an agent token via OBO (On-Behalf-Of), and creates the Teams chat
+on startup.  NO device-code flows.  NO ROPC.  NO fake user accounts.
+If authentication fails, the server prints an error and exits.
 
 Run directly with ``python -m openclaw.mcp_server`` or via the
 ``openclaw-mcp`` console script.
@@ -18,7 +18,7 @@ import sys
 from mcp.server.fastmcp import FastMCP
 
 from openclaw.config import get_config
-from openclaw.errors import MSALError, OpenclawError
+from openclaw.errors import MSALError, OBOExchangeError, OpenclawError
 from openclaw.logging_config import setup_logging
 
 logger: logging.Logger | None = None
@@ -30,7 +30,7 @@ _state: dict[str, object] = {}
 
 
 async def _initialize() -> None:
-    """Acquire the agent token and set up the Teams chat.
+    """Acquire the agent token via OBO and set up the Teams chat.
 
     Called lazily on the first tool invocation.  All config comes from
     environment variables (loaded from ``.env`` by ``openclaw.config``).
@@ -42,19 +42,20 @@ async def _initialize() -> None:
 
     config = get_config()
 
-    if not config.client_id or not config.tenant_id:
+    if not config.blueprint_app_id or not config.tenant_id:
         print(  # noqa: T201
-            "ERROR: OPENCLAW_CLIENT_ID / OPENCLAW_TENANT_ID not set. Run ./scripts/setup.sh first.",
+            "ERROR: OPENCLAW_BLUEPRINT_APP_ID / OPENCLAW_TENANT_ID not set. "
+            "Run ./scripts/setup.sh first.",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    # Acquire delegated token for the agent user via ROPC
+    # Acquire agent-attributed token via OBO flow
     try:
         token = acquire_agent_token(config)
-    except (MSALError, OpenclawError) as exc:
+    except (MSALError, OBOExchangeError, OpenclawError) as exc:
         print(  # noqa: T201
-            f"ERROR: Failed to acquire agent token. Run ./scripts/setup.sh first.\n{exc}",
+            f"ERROR: Failed to acquire agent token via OBO. Run ./scripts/setup.sh first.\n{exc}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -62,12 +63,11 @@ async def _initialize() -> None:
     _state["token"] = token
     _state["config"] = config
 
-    # Create / find the Teams chat (requires both user IDs)
-    if config.agent_user_id and config.human_user_id:
+    # Create / find the Teams chat (requires human user ID)
+    if config.human_user_id:
         try:
             chat = await create_or_find_chat(
                 token=token,
-                agent_user_id=config.agent_user_id,
                 human_user_id=config.human_user_id,
             )
             _state["chat_id"] = chat["chat_id"]
@@ -77,10 +77,7 @@ async def _initialize() -> None:
                 logger.warning("Could not set up Teams chat: %s", exc)
     else:
         if logger:
-            logger.warning(
-                "OPENCLAW_AGENT_USER_ID or OPENCLAW_HUMAN_USER_ID not set — "
-                "Teams tools will not work"
-            )
+            logger.warning("OPENCLAW_HUMAN_USER_ID not set — Teams tools will not work")
 
     _state["initialized"] = True
 
@@ -158,7 +155,7 @@ def openclaw_audit_log(
         action=action,
         resource=resource,
         outcome=outcome,
-        agent_id=config.agent_upn or config.client_id or "unknown",
+        agent_id=config.agent_id or config.blueprint_app_id or "unknown",
         metadata=meta,
     )
     return json.dumps(result, indent=2)

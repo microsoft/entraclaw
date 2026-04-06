@@ -45,11 +45,11 @@ class OpenclawConfig:
     """Immutable configuration loaded from environment variables."""
 
     tenant_id: str | None = field(default=None)
-    client_id: str | None = field(default=None)
-    client_secret: str | None = field(default=None)
-    agent_user_id: str | None = field(default=None)
-    agent_upn: str | None = field(default=None)
-    agent_password: str | None = field(default=None)
+    blueprint_app_id: str | None = field(default=None)
+    blueprint_object_id: str | None = field(default=None)
+    blueprint_secret: str | None = field(default=None)
+    agent_id: str | None = field(default=None)
+    agent_object_id: str | None = field(default=None)
     human_user_id: str | None = field(default=None)
     human_upn: str | None = field(default=None)
     log_dir: Path = field(default_factory=lambda: _default_dir("logs"))
@@ -62,11 +62,11 @@ class OpenclawConfig:
         """Build config from OPENCLAW_* environment variables."""
         return cls(
             tenant_id=os.environ.get("OPENCLAW_TENANT_ID"),
-            client_id=os.environ.get("OPENCLAW_CLIENT_ID"),
-            client_secret=os.environ.get("OPENCLAW_CLIENT_SECRET"),
-            agent_user_id=os.environ.get("OPENCLAW_AGENT_USER_ID"),
-            agent_upn=os.environ.get("OPENCLAW_AGENT_UPN"),
-            agent_password=os.environ.get("OPENCLAW_AGENT_PASSWORD"),
+            blueprint_app_id=os.environ.get("OPENCLAW_BLUEPRINT_APP_ID"),
+            blueprint_object_id=os.environ.get("OPENCLAW_BLUEPRINT_OBJECT_ID"),
+            blueprint_secret=os.environ.get("OPENCLAW_BLUEPRINT_SECRET"),
+            agent_id=os.environ.get("OPENCLAW_AGENT_ID"),
+            agent_object_id=os.environ.get("OPENCLAW_AGENT_OBJECT_ID"),
             human_user_id=os.environ.get("OPENCLAW_HUMAN_USER_ID"),
             human_upn=os.environ.get("OPENCLAW_HUMAN_UPN"),
             log_dir=Path(os.environ.get("OPENCLAW_LOG_DIR", _default_dir("logs"))),

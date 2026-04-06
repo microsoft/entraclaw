@@ -3,9 +3,11 @@
 All HTTP calls use ``httpx.AsyncClient`` with proper auth headers.
 Errors are mapped to the typed hierarchy in ``openclaw.errors``.
 
-The agent token is acquired via ROPC (Resource Owner Password Credentials)
-for the dedicated agent user created by ``scripts/setup.sh``.  Messages
-are sent FROM the agent user, not the human.
+The agent token is acquired via the OBO (On-Behalf-Of) flow:
+  1. Retrieve the human's cached refresh token from the OS keychain
+  2. Exchange it for a fresh human access token
+  3. Perform an OBO exchange: human token → agent-attributed token
+Messages are sent attributed to the Agent Identity, not the human.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from __future__ import annotations
 import logging
 
 import httpx
-from msal import PublicClientApplication
+from msal import ConfidentialClientApplication, PublicClientApplication
 
 from openclaw.config import OpenclawConfig
 from openclaw.errors import (
@@ -21,6 +23,7 @@ from openclaw.errors import (
     ChatNotFound,
     MessageTooLong,
     MSALError,
+    OBOExchangeError,
     RateLimitError,
     TeamsNotLicensed,
     TokenExpiredError,
@@ -32,7 +35,7 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
 MAX_MESSAGE_LENGTH = 28_000
 
-# Delegated scopes requested via ROPC for the agent user
+# Delegated scopes requested via OBO for the agent
 AGENT_SCOPES = [
     "https://graph.microsoft.com/Chat.Create",
     "https://graph.microsoft.com/ChatMessage.Send",
@@ -42,44 +45,101 @@ AGENT_SCOPES = [
 
 
 def acquire_agent_token(config: OpenclawConfig) -> str:
-    """Acquire a delegated token for the agent user via ROPC.
+    """Acquire an agent-attributed token via the OBO flow.
 
-    Raises ``AgentIDNotAvailable`` if required config fields are missing,
-    or ``MSALError`` if the ROPC flow fails.
+    Steps:
+      1. Retrieve the human's cached refresh token from the OS keychain.
+      2. Use a PublicClientApplication to silently get a human access token.
+      3. Use a ConfidentialClientApplication to exchange it via OBO.
+
+    The resulting token has ``azp`` = blueprint's client_id (the agent)
+    and ``oid`` = the human's object ID, so Entra sign-in logs attribute
+    the action to the agent, not the human.
+
+    Raises ``AgentIDNotAvailable`` if config or refresh token is missing,
+    ``MSALError`` if the human token acquisition fails,
+    or ``OBOExchangeError`` if the OBO exchange fails.
     """
-    if not all([config.client_id, config.tenant_id, config.agent_upn, config.agent_password]):
-        raise AgentIDNotAvailable("Agent credentials not configured. Run ./scripts/setup.sh first.")
+    if not all([config.blueprint_app_id, config.tenant_id, config.blueprint_secret]):
+        raise AgentIDNotAvailable(
+            "Blueprint credentials not configured. Run ./scripts/setup.sh first."
+        )
 
-    app = PublicClientApplication(
-        client_id=config.client_id,
-        authority=f"https://login.microsoftonline.com/{config.tenant_id}",
+    from openclaw.platform import get_credential_store
+
+    store = get_credential_store()
+    refresh_token = store.retrieve("openclaw", "human_refresh_token")
+    if not refresh_token:
+        raise AgentIDNotAvailable("No human refresh token found. Run ./scripts/setup.sh first.")
+
+    authority = f"https://login.microsoftonline.com/{config.tenant_id}"
+
+    # Step 1: Acquire a human token using the cached refresh token
+    public_app = PublicClientApplication(
+        client_id=config.blueprint_app_id,
+        authority=authority,
     )
 
-    result = app.acquire_token_by_username_password(
-        username=config.agent_upn,
-        password=config.agent_password,
+    # Try silent acquisition from MSAL cache first
+    accounts = public_app.get_accounts()
+    human_result = None
+    if accounts:
+        human_result = public_app.acquire_token_silent(
+            scopes=[f"api://{config.blueprint_app_id}/access_as_user"],
+            account=accounts[0],
+        )
+
+    if not human_result or "error" in (human_result or {}):
+        # Fallback: acquire using the refresh token directly
+        # MSAL's acquire_token_by_refresh_token is for migration scenarios
+        human_result = public_app.acquire_token_by_refresh_token(
+            refresh_token=refresh_token,
+            scopes=[f"api://{config.blueprint_app_id}/access_as_user"],
+        )
+
+    if not human_result or "error" in human_result:
+        error = (human_result or {}).get("error", "unknown_error")
+        desc = (human_result or {}).get(
+            "error_description",
+            "Human token expired. Re-run ./scripts/setup.sh to re-authenticate.",
+        )
+        raise MSALError(error, desc)
+
+    # Step 2: OBO exchange — human token → agent-attributed token
+    confidential_app = ConfidentialClientApplication(
+        client_id=config.blueprint_app_id,
+        client_credential=config.blueprint_secret,
+        authority=authority,
+    )
+
+    obo_result = confidential_app.acquire_token_on_behalf_of(
+        user_assertion=human_result["access_token"],
         scopes=AGENT_SCOPES,
     )
 
-    if "error" in result:
-        raise MSALError(
-            result["error"],
-            result.get("error_description", "ROPC token acquisition failed"),
+    if "error" in obo_result:
+        raise OBOExchangeError(
+            obo_result["error"],
+            obo_result.get("error_description", "OBO token exchange failed"),
         )
 
-    return result["access_token"]
+    return obo_result["access_token"]
 
 
 async def create_or_find_chat(
     *,
     token: str,
-    agent_user_id: str,
     human_user_id: str,
 ) -> dict:
-    """Create or resume a 1:1 Teams chat between the agent and human.
+    """Create or resume a 1:1 Teams chat with the human.
 
-    The Graph ``POST /chats`` call is idempotent for ``oneOnOne`` chats —
-    if a chat already exists between the two members it is returned unchanged.
+    With OBO tokens, the agent is identified by the ``azp`` claim in the
+    token.  The Graph ``POST /chats`` call is idempotent for ``oneOnOne``
+    chats — if a chat already exists it is returned unchanged.
+
+    The ``/me`` reference resolves to the human (whose ``oid`` is in the
+    OBO token), and the human_user_id is passed explicitly for the second
+    member binding.
     """
     headers = {
         "Authorization": f"Bearer {token}",
@@ -92,7 +152,7 @@ async def create_or_find_chat(
             {
                 "@odata.type": "#microsoft.graph.aadUserConversationMember",
                 "roles": ["owner"],
-                "user@odata.bind": (f"https://graph.microsoft.com/v1.0/users('{agent_user_id}')"),
+                "user@odata.bind": "https://graph.microsoft.com/v1.0/me",
             },
             {
                 "@odata.type": "#microsoft.graph.aadUserConversationMember",

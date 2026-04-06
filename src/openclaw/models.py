@@ -45,20 +45,20 @@ class TokenResult(BaseModel):
         return self.__repr__()
 
 
-class AgentCredentials(BaseModel):
-    """Credentials for the agent user. Secrets are REDACTED in repr/str."""
+class BlueprintCredentials(BaseModel):
+    """Credentials for the Agent Identity Blueprint. Secrets are REDACTED in repr/str."""
 
-    agent_upn: str
-    agent_password: str
-    client_id: str
+    blueprint_app_id: str
+    blueprint_secret: str
     tenant_id: str
+    agent_id: str | None = None
 
     def __repr__(self) -> str:
         return (
-            f"AgentCredentials(agent_upn={self.agent_upn!r}, "
-            f"agent_password='***REDACTED***', "
-            f"client_id={self.client_id!r}, "
-            f"tenant_id={self.tenant_id!r})"
+            f"BlueprintCredentials(blueprint_app_id={self.blueprint_app_id!r}, "
+            f"blueprint_secret='***REDACTED***', "
+            f"tenant_id={self.tenant_id!r}, "
+            f"agent_id={self.agent_id!r})"
         )
 
     def __str__(self) -> str:

@@ -1,7 +1,9 @@
-"""Tests for Teams tools — httpx fully mocked with respx.
+"""Tests for Teams tools — httpx fully mocked with respx, MSAL mocked.
 
-All tools now take an explicit *token* parameter instead of reading
-from the credential store. Messages are sent FROM the agent user.
+Token acquisition uses the OBO (On-Behalf-Of) flow:
+  1. Retrieve human's refresh token from the OS keychain
+  2. Exchange it for a human access token
+  3. OBO exchange: human token → agent-attributed token
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from openclaw.errors import (
     AgentIDNotAvailable,
     ChatNotFound,
     MessageTooLong,
-    MSALError,
+    OBOExchangeError,
     RateLimitError,
     TeamsNotLicensed,
     TokenExpiredError,
@@ -32,7 +34,7 @@ from openclaw.tools.teams import (
 )
 
 # ---------------------------------------------------------------------------
-# acquire_agent_token
+# acquire_agent_token (OBO flow)
 # ---------------------------------------------------------------------------
 
 
@@ -45,22 +47,53 @@ class TestAcquireAgentToken:
         ):
             acquire_agent_token(__import__("openclaw.config", fromlist=["get_config"]).get_config())
 
-    def test_msal_error_raised(self) -> None:
+    def test_missing_refresh_token_raises(self) -> None:
         env = {
-            "OPENCLAW_CLIENT_ID": "cid",
+            "OPENCLAW_BLUEPRINT_APP_ID": "bp-id",
             "OPENCLAW_TENANT_ID": "tid",
-            "OPENCLAW_AGENT_UPN": "agent@example.com",
-            "OPENCLAW_AGENT_PASSWORD": "pass",
+            "OPENCLAW_BLUEPRINT_SECRET": "secret",
         }
-        mock_app = MagicMock()
-        mock_app.acquire_token_by_username_password.return_value = {
-            "error": "invalid_grant",
-            "error_description": "Bad password",
-        }
+        mock_store = MagicMock()
+        mock_store.retrieve.return_value = None
         with (
             patch.dict(os.environ, env, clear=False),
-            patch("openclaw.tools.teams.PublicClientApplication", return_value=mock_app),
-            pytest.raises(MSALError, match="invalid_grant"),
+            patch("openclaw.platform.get_credential_store", return_value=mock_store),
+            pytest.raises(AgentIDNotAvailable, match="refresh token"),
+        ):
+            from openclaw.config import get_config
+
+            acquire_agent_token(get_config())
+
+    def test_obo_error_raised(self) -> None:
+        env = {
+            "OPENCLAW_BLUEPRINT_APP_ID": "bp-id",
+            "OPENCLAW_TENANT_ID": "tid",
+            "OPENCLAW_BLUEPRINT_SECRET": "secret",
+        }
+        mock_store = MagicMock()
+        mock_store.retrieve.return_value = "cached-refresh-token"
+
+        mock_public_app = MagicMock()
+        mock_public_app.get_accounts.return_value = []
+        mock_public_app.acquire_token_by_refresh_token.return_value = {
+            "access_token": "human-token",
+        }
+
+        mock_conf_app = MagicMock()
+        mock_conf_app.acquire_token_on_behalf_of.return_value = {
+            "error": "interaction_required",
+            "error_description": "Consent needed",
+        }
+
+        with (
+            patch.dict(os.environ, env, clear=False),
+            patch("openclaw.platform.get_credential_store", return_value=mock_store),
+            patch("openclaw.tools.teams.PublicClientApplication", return_value=mock_public_app),
+            patch(
+                "openclaw.tools.teams.ConfidentialClientApplication",
+                return_value=mock_conf_app,
+            ),
+            pytest.raises(OBOExchangeError, match="interaction_required"),
         ):
             from openclaw.config import get_config
 
@@ -68,23 +101,63 @@ class TestAcquireAgentToken:
 
     def test_success(self) -> None:
         env = {
-            "OPENCLAW_CLIENT_ID": "cid",
+            "OPENCLAW_BLUEPRINT_APP_ID": "bp-id",
             "OPENCLAW_TENANT_ID": "tid",
-            "OPENCLAW_AGENT_UPN": "agent@example.com",
-            "OPENCLAW_AGENT_PASSWORD": "pass",
+            "OPENCLAW_BLUEPRINT_SECRET": "secret",
         }
-        mock_app = MagicMock()
-        mock_app.acquire_token_by_username_password.return_value = {
-            "access_token": "agent-token-123",
+        mock_store = MagicMock()
+        mock_store.retrieve.return_value = "cached-refresh-token"
+
+        mock_public_app = MagicMock()
+        mock_public_app.get_accounts.return_value = []
+        mock_public_app.acquire_token_by_refresh_token.return_value = {
+            "access_token": "human-token",
         }
+
+        mock_conf_app = MagicMock()
+        mock_conf_app.acquire_token_on_behalf_of.return_value = {
+            "access_token": "agent-obo-token-123",
+        }
+
         with (
             patch.dict(os.environ, env, clear=False),
-            patch("openclaw.tools.teams.PublicClientApplication", return_value=mock_app),
+            patch("openclaw.platform.get_credential_store", return_value=mock_store),
+            patch("openclaw.tools.teams.PublicClientApplication", return_value=mock_public_app),
+            patch(
+                "openclaw.tools.teams.ConfidentialClientApplication",
+                return_value=mock_conf_app,
+            ),
         ):
             from openclaw.config import get_config
 
             token = acquire_agent_token(get_config())
-        assert token == "agent-token-123"
+        assert token == "agent-obo-token-123"
+
+    def test_human_token_failure_raises_msal_error(self) -> None:
+        env = {
+            "OPENCLAW_BLUEPRINT_APP_ID": "bp-id",
+            "OPENCLAW_TENANT_ID": "tid",
+            "OPENCLAW_BLUEPRINT_SECRET": "secret",
+        }
+        mock_store = MagicMock()
+        mock_store.retrieve.return_value = "cached-refresh-token"
+
+        mock_public_app = MagicMock()
+        mock_public_app.get_accounts.return_value = []
+        mock_public_app.acquire_token_by_refresh_token.return_value = {
+            "error": "invalid_grant",
+            "error_description": "Refresh token expired",
+        }
+
+        with (
+            patch.dict(os.environ, env, clear=False),
+            patch("openclaw.platform.get_credential_store", return_value=mock_store),
+            patch("openclaw.tools.teams.PublicClientApplication", return_value=mock_public_app),
+            pytest.raises(Exception, match="invalid_grant"),
+        ):
+            from openclaw.config import get_config
+
+            acquire_agent_token(get_config())
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +177,6 @@ class TestCreateOrFindChat:
         )
         result = await create_or_find_chat(
             token="agent-token",
-            agent_user_id="agent-uid",
             human_user_id="human-uid",
         )
         assert result["chat_id"] == "19:chat-id@thread.v2"
@@ -116,7 +188,6 @@ class TestCreateOrFindChat:
         with pytest.raises(TokenExpiredError):
             await create_or_find_chat(
                 token="expired",
-                agent_user_id="a",
                 human_user_id="h",
             )
 
@@ -127,7 +198,6 @@ class TestCreateOrFindChat:
         with pytest.raises(TeamsNotLicensed):
             await create_or_find_chat(
                 token="tok",
-                agent_user_id="a",
                 human_user_id="h",
             )
 
@@ -140,7 +210,6 @@ class TestCreateOrFindChat:
         with pytest.raises(RateLimitError) as exc_info:
             await create_or_find_chat(
                 token="tok",
-                agent_user_id="a",
                 human_user_id="h",
             )
         assert exc_info.value.retry_after == 30

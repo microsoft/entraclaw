@@ -21,10 +21,10 @@ async def whoami(*, token: str | None = None) -> dict:
     """
     config = get_config()
     return {
-        "agent_id": config.client_id or "not_configured",
-        "agent_upn": config.agent_upn or "not_configured",
+        "agent_type": "Entra Agent Identity",
+        "blueprint_app_id": config.blueprint_app_id or "not_configured",
+        "agent_id": config.agent_id or "not_configured",
         "tenant_id": config.tenant_id or "not_configured",
-        "human_upn": config.human_upn or "not_configured",
-        "human_user_id": config.human_user_id or "not_configured",
+        "human_sponsor": config.human_upn or "not_configured",
         "status": "authenticated" if token else "not_authenticated",
     }

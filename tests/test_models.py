@@ -1,9 +1,9 @@
 """Tests for Pydantic domain models — especially token/credential redaction."""
 
 from openclaw.models import (
-    AgentCredentials,
     AgentIdentity,
     AuditEvent,
+    BlueprintCredentials,
     TeamsChat,
     TeamsMessage,
     TokenResult,
@@ -36,46 +36,52 @@ class TestTokenRedaction:
         assert "secret" not in formatted
 
 
-class TestAgentCredentials:
-    """AgentCredentials must redact the password in repr/str."""
+class TestBlueprintCredentials:
+    """BlueprintCredentials must redact the secret in repr/str."""
 
-    def test_repr_redacts_password(self) -> None:
-        creds = AgentCredentials(
-            agent_upn="agent@example.com",
-            agent_password="super-secret-pass",
-            client_id="cid",
+    def test_repr_redacts_secret(self) -> None:
+        creds = BlueprintCredentials(
+            blueprint_app_id="bp-app-id",
+            blueprint_secret="super-secret-value",
             tenant_id="tid",
+            agent_id="aid",
         )
-        assert "super-secret-pass" not in repr(creds)
+        assert "super-secret-value" not in repr(creds)
         assert "***REDACTED***" in repr(creds)
 
-    def test_str_redacts_password(self) -> None:
-        creds = AgentCredentials(
-            agent_upn="agent@example.com",
-            agent_password="super-secret-pass",
-            client_id="cid",
+    def test_str_redacts_secret(self) -> None:
+        creds = BlueprintCredentials(
+            blueprint_app_id="bp-app-id",
+            blueprint_secret="super-secret-value",
             tenant_id="tid",
         )
-        assert "super-secret-pass" not in str(creds)
+        assert "super-secret-value" not in str(creds)
 
-    def test_password_still_accessible_via_field(self) -> None:
-        creds = AgentCredentials(
-            agent_upn="a@e.com",
-            agent_password="my-pass",
-            client_id="c",
+    def test_secret_still_accessible_via_field(self) -> None:
+        creds = BlueprintCredentials(
+            blueprint_app_id="bp",
+            blueprint_secret="my-secret",
             tenant_id="t",
         )
-        assert creds.agent_password == "my-pass"
+        assert creds.blueprint_secret == "my-secret"
 
     def test_f_string_redacts(self) -> None:
-        creds = AgentCredentials(
-            agent_upn="a@e.com",
-            agent_password="secret",
-            client_id="c",
+        creds = BlueprintCredentials(
+            blueprint_app_id="bp",
+            blueprint_secret="my-super-secret-value",
             tenant_id="t",
         )
         formatted = f"creds = {creds}"
-        assert "secret" not in formatted
+        assert "my-super-secret-value" not in formatted
+        assert "***REDACTED***" in formatted
+
+    def test_agent_id_optional(self) -> None:
+        creds = BlueprintCredentials(
+            blueprint_app_id="bp",
+            blueprint_secret="s",
+            tenant_id="t",
+        )
+        assert creds.agent_id is None
 
 
 class TestAgentIdentity:

@@ -11,11 +11,11 @@ class TestOpenclawConfig:
     def test_defaults(self) -> None:
         cfg = OpenclawConfig()
         assert cfg.tenant_id is None
-        assert cfg.client_id is None
-        assert cfg.client_secret is None
-        assert cfg.agent_user_id is None
-        assert cfg.agent_upn is None
-        assert cfg.agent_password is None
+        assert cfg.blueprint_app_id is None
+        assert cfg.blueprint_object_id is None
+        assert cfg.blueprint_secret is None
+        assert cfg.agent_id is None
+        assert cfg.agent_object_id is None
         assert cfg.human_user_id is None
         assert cfg.human_upn is None
         assert cfg.log_level == "INFO"
@@ -26,11 +26,11 @@ class TestOpenclawConfig:
     def test_from_env(self) -> None:
         env = {
             "OPENCLAW_TENANT_ID": "my-tenant",
-            "OPENCLAW_CLIENT_ID": "my-client",
-            "OPENCLAW_CLIENT_SECRET": "my-secret",
-            "OPENCLAW_AGENT_USER_ID": "agent-uid",
-            "OPENCLAW_AGENT_UPN": "agent@example.com",
-            "OPENCLAW_AGENT_PASSWORD": "agent-pass",
+            "OPENCLAW_BLUEPRINT_APP_ID": "my-blueprint",
+            "OPENCLAW_BLUEPRINT_OBJECT_ID": "my-blueprint-obj",
+            "OPENCLAW_BLUEPRINT_SECRET": "my-secret",
+            "OPENCLAW_AGENT_ID": "my-agent-id",
+            "OPENCLAW_AGENT_OBJECT_ID": "my-agent-obj",
             "OPENCLAW_HUMAN_USER_ID": "human-uid",
             "OPENCLAW_HUMAN_UPN": "human@example.com",
             "OPENCLAW_LOG_LEVEL": "DEBUG",
@@ -41,11 +41,11 @@ class TestOpenclawConfig:
         with patch.dict(os.environ, env, clear=False):
             cfg = OpenclawConfig.from_env()
         assert cfg.tenant_id == "my-tenant"
-        assert cfg.client_id == "my-client"
-        assert cfg.client_secret == "my-secret"
-        assert cfg.agent_user_id == "agent-uid"
-        assert cfg.agent_upn == "agent@example.com"
-        assert cfg.agent_password == "agent-pass"
+        assert cfg.blueprint_app_id == "my-blueprint"
+        assert cfg.blueprint_object_id == "my-blueprint-obj"
+        assert cfg.blueprint_secret == "my-secret"
+        assert cfg.agent_id == "my-agent-id"
+        assert cfg.agent_object_id == "my-agent-obj"
         assert cfg.human_user_id == "human-uid"
         assert cfg.human_upn == "human@example.com"
         assert cfg.log_level == "DEBUG"
@@ -59,7 +59,7 @@ class TestOpenclawConfig:
         with patch.dict(os.environ, cleaned, clear=True):
             cfg = OpenclawConfig.from_env()
         assert cfg.tenant_id is None
-        assert cfg.agent_upn is None
+        assert cfg.blueprint_app_id is None
         assert cfg.log_level == "INFO"
 
     def test_frozen(self) -> None:
