@@ -64,12 +64,16 @@ az ad app credential reset --id <app-id> --display-name "Openclaw MVP"
 #    The client secret on a device is a crown-jewel credential (see proposals.md Risk #1).
 ```
 
-### 3. Agent ID Blueprint (Entra GA API)
+### 3. Agent ID Blueprint (Entra Beta API)
+
+> ⚠️ Agent IDs require the **beta** Graph API and Frontier/Workload Identities Premium licensing.
+> If not available in your tenant, skip this step — OBO still works without Agent IDs
+> (the `azp` claim in sign-in logs still identifies the agent app).
 
 Register an Agent ID blueprint for the Openclaw agent type:
 
 ```http
-POST https://graph.microsoft.com/v1.0/agentIdentityBlueprints
+POST https://graph.microsoft.com/beta/agentIdentityBlueprints
 Content-Type: application/json
 
 {
