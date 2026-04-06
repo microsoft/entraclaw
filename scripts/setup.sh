@@ -316,7 +316,7 @@ fi
 
 echo -e "  ${YELLOW}NEXT STEPS:${NC}"
 echo -e "  1. Wait 10-15 min for Teams/mailbox provisioning (if license was just assigned)"
-echo -e "  2. Run tests: ${BLUE}pytest -v${NC}"
+echo -e "  2. Run tests: ${BLUE}source .venv/bin/activate && pytest -v${NC}"
 echo -e "  3. Start the MCP server via Copilot CLI config:"
 echo ""
 echo -e "     ${BLUE}~/.copilot/mcp-config.json${NC}"
