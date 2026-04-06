@@ -61,13 +61,16 @@ fi
 
 # ── Delete Provisioner app (if exists) ──────────────────────────────────────
 
-PROV_OBJ=$(az ad app list --display-name "Openclaw Agent ID Provisioner" \
-    --query "[0].id" -o tsv 2>/dev/null || echo "")
-if [ -n "$PROV_OBJ" ]; then
-    az ad app delete --id "$PROV_OBJ" 2>/dev/null && \
-        echo -e "  ${GREEN}✅ Deleted Provisioner app registration${NC}" || \
-        echo -e "  ${YELLOW}⚠️  Could not delete Provisioner app${NC}"
-fi
+# Check both the old and new provisioner app names
+for PROV_NAME in "Openclaw Provisioner" "Openclaw Agent ID Provisioner"; do
+    PROV_OBJ=$(az ad app list --display-name "$PROV_NAME" \
+        --query "[0].id" -o tsv 2>/dev/null || echo "")
+    if [ -n "$PROV_OBJ" ]; then
+        az ad app delete --id "$PROV_OBJ" 2>/dev/null && \
+            echo -e "  ${GREEN}✅ Deleted Provisioner app registration ($PROV_NAME)${NC}" || \
+            echo -e "  ${YELLOW}⚠️  Could not delete Provisioner app ($PROV_NAME)${NC}"
+    fi
+done
 
 # ── Clear cached credentials ────────────────────────────────────────────────
 
