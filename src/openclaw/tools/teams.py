@@ -137,34 +137,44 @@ async def create_or_find_chat(
     *,
     token: str,
     human_user_id: str,
+    agent_user_id: str | None = None,
 ) -> dict:
     """Create or resume a 1:1 Teams chat between the Agent User and the human.
 
-    The Agent User token has ``idtyp=user``, so ``/me`` resolves to the
-    Agent User.  The Graph ``POST /chats`` call is idempotent for
-    ``oneOnOne`` chats — if a chat already exists it is returned unchanged.
+    Uses explicit user IDs for both members (not ``/me``) because the
+    ``user@odata.bind`` field doesn't reliably resolve ``/me`` for
+    Agent User tokens in the chat creation context.
+
+    The Graph ``POST /chats`` call is idempotent for ``oneOnOne`` chats —
+    if a chat already exists it is returned unchanged.
     """
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
 
+    members = [
+        {
+            "@odata.type": "#microsoft.graph.aadUserConversationMember",
+            "roles": ["owner"],
+            "user@odata.bind": (
+                f"https://graph.microsoft.com/v1.0/users('{human_user_id}')"
+            ),
+        },
+    ]
+    # Add Agent User as explicit member if ID is provided
+    if agent_user_id:
+        members.insert(0, {
+            "@odata.type": "#microsoft.graph.aadUserConversationMember",
+            "roles": ["owner"],
+            "user@odata.bind": (
+                f"https://graph.microsoft.com/v1.0/users('{agent_user_id}')"
+            ),
+        })
+
     chat_payload = {
         "chatType": "oneOnOne",
-        "members": [
-            {
-                "@odata.type": "#microsoft.graph.aadUserConversationMember",
-                "roles": ["owner"],
-                "user@odata.bind": "https://graph.microsoft.com/v1.0/me",
-            },
-            {
-                "@odata.type": "#microsoft.graph.aadUserConversationMember",
-                "roles": ["owner"],
-                "user@odata.bind": (
-                    f"https://graph.microsoft.com/v1.0/users('{human_user_id}')"
-                ),
-            },
-        ],
+        "members": members,
     }
 
     async with httpx.AsyncClient() as client:

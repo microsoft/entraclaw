@@ -84,6 +84,7 @@ async def _initialize() -> None:
             chat = await create_or_find_chat(
                 token=token,
                 human_user_id=config.human_user_id,
+                agent_user_id=config.agent_user_id,
             )
             _state["chat_id"] = chat["chat_id"]
         except OpenclawError as exc:
