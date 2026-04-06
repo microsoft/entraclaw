@@ -12,12 +12,14 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import time
 
 from mcp.server.fastmcp import FastMCP
 
 from openclaw.config import get_config
 from openclaw.errors import OpenclawError, TokenExchangeError
 from openclaw.logging_config import setup_logging
+from openclaw.tools.teams import acquire_agent_user_token
 
 logger: logging.Logger | None = None
 
@@ -43,6 +45,40 @@ mcp = FastMCP(
 # Module-level state populated by _initialize()
 _state: dict[str, object] = {}
 
+TOKEN_REFRESH_THRESHOLD = 3300  # 55 min (5-min buffer on 60-min expiry)
+
+
+async def _ensure_valid_token() -> None:
+    """Eagerly refresh the Agent User token if it's near expiry.
+
+    Called before every Graph API call. If the token is older than
+    TOKEN_REFRESH_THRESHOLD seconds, re-runs the full three-hop flow.
+    """
+    acquired_at = _state.get("token_acquired_at")
+    if acquired_at is None or (time.monotonic() - acquired_at) > TOKEN_REFRESH_THRESHOLD:
+        if logger:
+            logger.info("Token near expiry — refreshing via three-hop flow")
+        _state["token"] = acquire_agent_user_token(_state["config"])
+        _state["token_acquired_at"] = time.monotonic()
+
+
+async def _with_token_retry(fn, **kwargs):
+    """Call *fn* with the current token; on TokenExpiredError, refresh and retry once.
+
+    The function *fn* must accept a ``token`` keyword argument.
+    Any additional kwargs are passed through to *fn*.
+    """
+    from openclaw.errors import TokenExpiredError
+
+    try:
+        return await fn(token=str(_state["token"]), **kwargs)
+    except TokenExpiredError:
+        if logger:
+            logger.warning("Token expired mid-call — refreshing and retrying")
+        _state["token"] = acquire_agent_user_token(_state["config"])
+        _state["token_acquired_at"] = time.monotonic()
+        return await fn(token=str(_state["token"]), **kwargs)
+
 
 async def _initialize() -> None:
     """Acquire the Agent User token and set up the Teams chat.
@@ -53,7 +89,7 @@ async def _initialize() -> None:
     if _state.get("initialized"):
         return
 
-    from openclaw.tools.teams import acquire_agent_user_token, create_or_find_chat
+    from openclaw.tools.teams import create_or_find_chat
 
     config = get_config()
 
@@ -76,6 +112,7 @@ async def _initialize() -> None:
         sys.exit(1)
 
     _state["token"] = token
+    _state["token_acquired_at"] = time.monotonic()
     _state["config"] = config
 
     # Create / find the Teams chat (requires human user ID)
