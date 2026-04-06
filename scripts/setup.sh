@@ -21,13 +21,13 @@ TOTAL_STEPS=8
 
 # ── Argument parsing ───────────────────────────────────────────────────────
 
-OVERRIDE_HUMAN_USER=""
+SWITCH_USER=false
 SHOW_HELP=false
 
 for arg in "$@"; do
     case $arg in
-        --human-user=*)
-            OVERRIDE_HUMAN_USER="${arg#--human-user=}"
+        --switch-user)
+            SWITCH_USER=true
             ;;
         --help|-h)
             SHOW_HELP=true
@@ -43,9 +43,9 @@ if [ "$SHOW_HELP" = true ]; then
     echo "Usage: ./scripts/setup.sh [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --human-user=EMAIL   Override the human user (default: signed-in az CLI user)"
-    echo "                       e.g., --human-user=brandon@other.com"
-    echo "  --help, -h           Show this help"
+    echo "  --switch-user   Sign in as a different user before setup."
+    echo "                  The new user becomes the agent's owner and sponsor."
+    echo "  --help, -h      Show this help"
     exit 0
 fi
 
@@ -134,32 +134,27 @@ success "git found ($(git --version | awk '{print $3}'))"
 # ════════════════════════════════════════════════════════════════════════════
 step 2 "Verifying Azure login"
 
+if [ "$SWITCH_USER" = true ]; then
+    echo "  Signing in as a new user (the new user will own/sponsor the agent)..."
+    az login
+fi
+
 if ! az account show &>/dev/null; then
     fail "Not logged in to Azure CLI. Run 'az login' first."
 fi
 
 TENANT_ID=$(az account show --query "tenantId" -o tsv)
 ACCOUNT_NAME=$(az account show --query "name" -o tsv)
+HUMAN_UPN=$(az account show --query "user.name" -o tsv || echo "")
+HUMAN_USER_ID=$(az ad signed-in-user show --query "id" -o tsv || echo "")
 
-if [ -n "$OVERRIDE_HUMAN_USER" ]; then
-    HUMAN_UPN="$OVERRIDE_HUMAN_USER"
-    # Resolve UPN to object ID via Graph
-    HUMAN_USER_ID=$(az ad user show --id "$HUMAN_UPN" --query "id" -o tsv) || true
-    if [ -z "$HUMAN_USER_ID" ]; then
-        fail "Could not find user '$HUMAN_UPN' in Entra. Check the email address."
-    fi
-    success "Human user (override): $HUMAN_UPN ($HUMAN_USER_ID)"
-else
-    HUMAN_UPN=$(az account show --query "user.name" -o tsv || echo "")
-    HUMAN_USER_ID=$(az ad signed-in-user show --query "id" -o tsv || echo "")
-    if [ -z "$HUMAN_USER_ID" ]; then
-        fail "Could not determine signed-in user ID. Ensure 'az login' is done with a user account."
-    fi
-    success "Human user: $HUMAN_UPN ($HUMAN_USER_ID)"
+if [ -z "$HUMAN_USER_ID" ]; then
+    fail "Could not determine signed-in user ID. Ensure 'az login' is done with a user account."
 fi
 
 success "Tenant:     $TENANT_ID"
 success "Account:    $ACCOUNT_NAME"
+success "Human user: $HUMAN_UPN ($HUMAN_USER_ID)"
 
 # ════════════════════════════════════════════════════════════════════════════
 # Step 3: Ensure Python dependencies for provisioning scripts
