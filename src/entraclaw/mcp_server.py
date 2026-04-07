@@ -217,9 +217,7 @@ async def _initialize() -> None:
 
     _state["initialized"] = True
 
-    # The configured --teams-user chat is always trusted (no pairing needed).
-    # Store the chat_id so the gate can skip it.
-    _state["trusted_chat_id"] = _state.get("chat_id")
+    # Background poll watches only the configured --teams-user chat (trusted).
 
     # Start background polling for inbound Teams messages (like iMessage channel)
     if _state.get("chat_id"):
@@ -247,7 +245,7 @@ async def _background_poll() -> None:
     """
     import asyncio
 
-    from entraclaw.tools.teams import filter_human_messages, read_all_chats
+    from entraclaw.tools.teams import filter_human_messages, read
 
     if logger:
         logger.info("Starting background Teams poll (interval=%ds)", BACKGROUND_POLL_INTERVAL)
@@ -255,15 +253,16 @@ async def _background_poll() -> None:
     # Must match the displayName that Graph API returns in message.from.user.displayName
     # NOT the UPN — Graph returns "EntraClaw Agent", not "entraclaw-agent@werner.ac"
     agent_display_name = "EntraClaw Agent"
+    chat_id = str(_state["chat_id"])
 
     # Background poll has its OWN cursor and seen-set (separate from watch_teams_replies)
     bg_seen_ids: set[str] = set()
     bg_last_ts: str | None = None
 
-    # Bootstrap: set watermark to newest messages across ALL chats
+    # Bootstrap: set watermark to newest existing message
     try:
         await _ensure_valid_token()
-        bootstrap_msgs = await _with_token_retry(read_all_chats, count_per_chat=5)
+        bootstrap_msgs = await _with_token_retry(read, chat_id=chat_id, count=10)
         if bootstrap_msgs:
             newest = max(bootstrap_msgs, key=lambda m: m.get("sent_at", ""))
             bg_last_ts = newest["sent_at"]
@@ -278,9 +277,7 @@ async def _background_poll() -> None:
             await asyncio.sleep(BACKGROUND_POLL_INTERVAL)
             await _ensure_valid_token()
 
-            # Poll ALL 1:1 chats — not just the configured one. This catches
-            # federated/cross-tenant chats that the agent didn't create.
-            raw_messages = await _with_token_retry(read_all_chats, count_per_chat=5)
+            raw_messages = await _with_token_retry(read, chat_id=chat_id, count=10)
             human_msgs = filter_human_messages(raw_messages, agent_display_name)
             new_msgs = _filter_new_messages(human_msgs, bg_last_ts, bg_seen_ids)
 
@@ -295,41 +292,10 @@ async def _background_poll() -> None:
                 if len(bg_seen_ids) > SEEN_SET_MAX:
                     bg_seen_ids = set(sorted(bg_seen_ids)[-100:])
 
-                # Gate check: only push messages from allowed senders
-                # The configured --teams-user chat is always trusted.
-                from entraclaw.access import gate
-                from entraclaw.tools.teams import send
-
-                trusted_chat = _state.get("trusted_chat_id")
-
+                # Single-chat mode: the configured --teams-user chat is always
+                # trusted. Push all new messages directly.
                 for m in sorted(new_msgs, key=lambda m: m.get("sent_at", "")):
-                    sender = m.get("from", "unknown")
-                    msg_chat_id = m.get("chat_id", str(_state.get("chat_id", "")))
-
-                    # Skip gate for the configured human's chat
-                    action = "deliver" if msg_chat_id == trusted_chat else gate(sender, msg_chat_id)
-
-                    if action == "deliver":
-                        await _push_channel_notification(m)
-                    elif action.startswith("pair:"):
-                        pair_code = action.split(":", 1)[1]
-                        # Send pairing message back to the sender in Teams
-                        try:
-                            await _with_token_retry(
-                                send,
-                                chat_id=msg_chat_id,
-                                message=(
-                                    f"Hi {sender}! I'm an autonomous AI agent. "
-                                    f"To authorize you to send me instructions, "
-                                    f"ask my owner to run in their terminal:\n\n"
-                                    f"  approve_teams_sender {pair_code}\n\n"
-                                    f"Your pairing code: {pair_code}"
-                                ),
-                            )
-                        except Exception as exc:
-                            if logger:
-                                logger.warning("Failed to send pairing msg: %s", exc)
-                    # action == "drop" → silently ignore
+                    await _push_channel_notification(m)
 
         except Exception as exc:
             if logger:
@@ -566,66 +532,6 @@ async def watch_teams_replies(
 
         if interval > 0:
             await asyncio.sleep(interval)
-
-
-@mcp.tool()
-def approve_teams_sender(code: str) -> str:
-    """Approve a pending Teams sender by their pairing code.
-
-    When an unknown sender messages the agent, they receive a pairing code.
-    Run this tool with that code to add them to the allowlist so their
-    messages are delivered to you.
-
-    Args:
-        code: The 6-character pairing code shown to the sender.
-
-    Returns:
-        JSON with the approved sender name, or an error.
-    """
-    from entraclaw.access import approve_pairing
-
-    sender = approve_pairing(code)
-    if sender:
-        return json.dumps({"approved": sender, "code": code})
-    return json.dumps({"error": f"No pending pairing with code '{code}'. It may have expired."})
-
-
-@mcp.tool()
-def list_teams_access() -> str:
-    """List allowed Teams senders and pending pairing requests.
-
-    Shows who is authorized to send instructions via Teams, and any
-    pending pairing requests waiting for approval.
-
-    Returns:
-        JSON with allowed senders and pending pairings.
-    """
-    from entraclaw.access import list_allowed, list_pending
-
-    return json.dumps(
-        {
-            "allowed": list_allowed(),
-            "pending": list_pending(),
-        },
-        indent=2,
-    )
-
-
-@mcp.tool()
-def remove_teams_sender(sender_name: str) -> str:
-    """Remove a sender from the Teams allowlist.
-
-    Args:
-        sender_name: The display name of the sender to remove.
-
-    Returns:
-        JSON confirming removal or error.
-    """
-    from entraclaw.access import remove_allowed
-
-    if remove_allowed(sender_name):
-        return json.dumps({"removed": sender_name})
-    return json.dumps({"error": f"'{sender_name}' not found in allowlist."})
 
 
 @mcp.tool()
