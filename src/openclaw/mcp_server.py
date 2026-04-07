@@ -590,13 +590,19 @@ async def _run_stdio_with_write_stream() -> None:
     The standard ``mcp.run(transport="stdio")`` doesn't expose the write stream.
     We override it to capture the stream, enabling background notification push
     (the same pattern the iMessage channel plugin uses).
+
+    Declares ``claude/channel`` experimental capability so Claude Code registers
+    a notification handler for ``notifications/claude/channel`` from this server.
+    Without this capability, channel notifications are silently dropped.
     """
     async with stdio_server() as (read_stream, write_stream):
         _state["_write_stream"] = write_stream
         await mcp._mcp_server.run(
             read_stream,
             write_stream,
-            mcp._mcp_server.create_initialization_options(),
+            mcp._mcp_server.create_initialization_options(
+                experimental_capabilities={"claude/channel": {}},
+            ),
         )
 
 
