@@ -568,8 +568,11 @@ class TestRateLimitHandling:
                         ]
                     },
                 ),
-                # Second call: 429
-                httpx.Response(429, headers={"Retry-After": "30"}),
+                # Second call: 429 (retry transport retries up to 3 more times)
+                httpx.Response(429, headers={"Retry-After": "0"}),
+                httpx.Response(429, headers={"Retry-After": "0"}),
+                httpx.Response(429, headers={"Retry-After": "0"}),
+                httpx.Response(429, headers={"Retry-After": "0"}),
             ]
         )
 
@@ -597,7 +600,7 @@ class TestRateLimitHandling:
             ):
                 await mcp_server.watch_teams_replies(timeout=5, interval=0)
 
-            assert exc_info.value.retry_after == 30
+            assert exc_info.value.retry_after == 0
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
