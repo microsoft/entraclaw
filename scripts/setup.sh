@@ -302,9 +302,10 @@ from entra_provisioning import get_graph_token
 token = get_graph_token(wait_for_propagation=False)
 
 # Graph API: PATCH /applications/{id} with keyCredentials
+# Dates MUST come from the cert itself and use Graph's 7-decimal-place format
 cert_b64 = base64.b64encode(der_bytes).decode()
-end_date = (datetime.now(timezone.utc) + timedelta(days=365)).strftime('%Y-%m-%dT%H:%M:%SZ')
-start_date = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+start_date = cert.not_valid_before_utc.strftime('%Y-%m-%dT%H:%M:%S.0000000Z')
+end_date = cert.not_valid_after_utc.strftime('%Y-%m-%dT%H:%M:%S.0000000Z')
 
 # Use v1.0 (not beta) for keyCredentials — more stable (Learning #15)
 resp = requests.patch(
