@@ -2,7 +2,7 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "mcp__openclaw__send_teams_message",
+        "matcher": "mcp__entraclaw__send_teams_message",
         "hooks": [
           {
             "type": "command",
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import json, pathlib; state=json.loads(pathlib.Path('.openclaw-state.json').read_text()) if pathlib.Path('.openclaw-state.json').is_file() else {}; sent=state.get('_last_send_timestamp',''); import sys; sys.exit(0)\" 2>/dev/null; echo '{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"additionalContext\":\"Before stopping: if you sent a Teams message this session, did you call watch_teams_replies to check for the human reply? The human is remote and communicates via Teams. If you sent a message and did not poll for a reply, call watch_teams_replies now.\"}}'",
+            "command": "echo '{\"decision\":\"block\",\"reason\":\"Before stopping: if you sent a Teams message this session, did you call watch_teams_replies to check for the human reply? The human is remote and communicates via Teams. If you sent a message and did not poll for a reply, call watch_teams_replies now.\"}'",
             "timeout": 5
           }
         ]
