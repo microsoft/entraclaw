@@ -16,6 +16,9 @@ import time
 from datetime import UTC, datetime, timedelta
 
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.stdio import stdio_server
+from mcp.shared.message import SessionMessage
+from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 from openclaw.config import get_config
 from openclaw.errors import OpenclawError, TokenExchangeError
@@ -307,13 +310,20 @@ async def _push_channel_notification(message: dict) -> None:
 
     This is the same notification method used by the iMessage channel plugin.
     Claude Code receives it and injects the message into the conversation.
-    """
-    import json as _json
 
-    notification = {
-        "jsonrpc": "2.0",
-        "method": "notifications/claude/channel",
-        "params": {
+    Uses the MCP SDK's write stream (captured during server startup) to ensure
+    notifications go through the proper transport layer, not raw stdout.
+    """
+    write_stream = _state.get("_write_stream")
+    if not write_stream:
+        if logger:
+            logger.warning("Cannot push notification — write stream not available")
+        return
+
+    notification = JSONRPCNotification(
+        jsonrpc="2.0",
+        method="notifications/claude/channel",
+        params={
             "content": message.get("content", ""),
             "meta": {
                 "chat_id": str(_state.get("chat_id", "")),
@@ -322,12 +332,9 @@ async def _push_channel_notification(message: dict) -> None:
                 "ts": message.get("sent_at", ""),
             },
         },
-    }
-
-    # Write JSON-RPC notification to stdout (stdio transport)
-    line = _json.dumps(notification) + "\n"
-    sys.stdout.write(line)
-    sys.stdout.flush()
+    )
+    session_message = SessionMessage(message=JSONRPCMessage(notification))
+    await write_stream.send(session_message)
 
     if logger:
         logger.info(
@@ -583,12 +590,30 @@ async def whoami() -> str:
     return json.dumps(result, indent=2)
 
 
+async def _run_stdio_with_write_stream() -> None:
+    """Run the MCP server on stdio, capturing the write stream for notifications.
+
+    The standard ``mcp.run(transport="stdio")`` doesn't expose the write stream.
+    We override it to capture the stream, enabling background notification push
+    (the same pattern the iMessage channel plugin uses).
+    """
+    async with stdio_server() as (read_stream, write_stream):
+        _state["_write_stream"] = write_stream
+        await mcp._mcp_server.run(
+            read_stream,
+            write_stream,
+            mcp._mcp_server.create_initialization_options(),
+        )
+
+
 def main() -> None:
     """Entry point for ``openclaw-mcp`` console script."""
+    import anyio
+
     global logger
     logger = setup_logging()
     logger.info("Starting Openclaw MCP server (Agent User auth)")
-    mcp.run(transport="stdio")
+    anyio.run(_run_stdio_with_write_stream)
 
 
 if __name__ == "__main__":
