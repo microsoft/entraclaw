@@ -196,6 +196,22 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 **Prevention:** When the Triggers & Events WG ships its spec, adopt immediately. Our polling infrastructure (`watch_teams_replies`) already works — we just need to swap "LLM decides to poll" to "server pushes event."
 **See also:** `docs/platform-learnings/mcp-close-the-loop.md` for the full research with sources.
 
+### Learning #24: Human Tokens Cannot Bootstrap the Agent Identity Chain
+
+**Date:** 2026-04-06
+**Context:** Investigating whether a human interactive sign-in could replace client_credentials in Hop 1 of the three-hop flow, eliminating the need for client secrets on devices.
+**Problem:** Client secrets in `.env` files are fragile, hard to rotate, and explicitly warned against by Microsoft for production.
+**Root cause:** All agent entities (Blueprint, Agent Identity, Agent User) are **confidential clients**. Microsoft states: "Interactive flows aren't supported for any agent entity type." Hop 2's audience validation requires T1 to come from the Blueprint specifically — a human token has the wrong audience.
+**Fix:** Use certificate-based auth instead. Replace `client_secret` with `client_assertion` (JWT signed by a private key in macOS Keychain / Windows TPM). Drop-in replacement for Hop 1, no architecture change needed.
+**Prevention:** When looking for auth alternatives, check the client type requirement first. Confidential clients can never use interactive flows. See ADR-003.
+
+### Learning #25: Agent OBO Is a Separate Flow Where Human Tokens Enter at Hop 2
+
+**Date:** 2026-04-06
+**Context:** Researching human-to-agent auth alternatives
+**Discovery:** Microsoft documents an "Agent OBO" flow where a human user's token IS used — but it enters at Hop 2 as the OBO `assertion`, not at Hop 1 as the Blueprint credential. The Blueprint still authenticates with its own confidential credentials. This flow is for "interactive agents" that act on behalf of a signed-in user, NOT for autonomous agents like Openclaw.
+**Implication:** If Openclaw ever adds a mode where the agent acts on behalf of a specific human (not as its own digital worker), the Agent OBO flow provides that pattern. The human token + Blueprint credential together produce an Agent Identity token scoped to that human's permissions.
+
 ### Learning #23: FastMCP Context Object Has Untapped Capabilities
 
 **Date:** 2026-04-06
