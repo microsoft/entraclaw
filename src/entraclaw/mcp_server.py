@@ -249,7 +249,9 @@ async def _background_poll() -> None:
         logger.info("Starting background Teams poll (interval=%ds)", BACKGROUND_POLL_INTERVAL)
 
     config = _state["config"]
-    agent_display_name = config.agent_user_upn or "EntraClaw Agent"
+    # Must match the displayName that Graph API returns in message.from.user.displayName
+    # NOT the UPN — Graph returns "EntraClaw Agent", not "entraclaw-agent@werner.ac"
+    agent_display_name = "EntraClaw Agent"
     chat_id = str(_state["chat_id"])
 
     # Background poll has its OWN cursor and seen-set (separate from watch_teams_replies)
@@ -433,7 +435,9 @@ async def watch_teams_replies(
         return json.dumps({"error": "Teams chat not established. Check setup."})
 
     config = _state["config"]
-    agent_display_name = config.agent_user_upn or "EntraClaw Agent"
+    # Must match the displayName that Graph API returns in message.from.user.displayName
+    # NOT the UPN — Graph returns "EntraClaw Agent", not "entraclaw-agent@werner.ac"
+    agent_display_name = "EntraClaw Agent"
 
     # Bootstrap cursor on first call: fetch latest messages, set cursor to newest
     if _state.get("last_seen_timestamp") is None:
