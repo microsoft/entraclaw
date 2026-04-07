@@ -317,6 +317,66 @@ async def read(
         ]
 
 
+async def read_all_chats(
+    *,
+    token: str,
+    count_per_chat: int = 5,
+) -> list[dict]:
+    """Read recent messages across ALL the agent's 1:1 chats.
+
+    Lists all oneOnOne chats, then reads recent messages from each.
+    Supports cross-tenant/federated chats that the agent didn't create.
+    Each message includes a ``chat_id`` field so callers know which chat it's from.
+    """
+    headers = {
+        "Authorization": f"Bearer {token}",
+    }
+
+    all_messages: list[dict] = []
+
+    async with httpx.AsyncClient() as client:
+        # List all 1:1 chats
+        resp = await client.get(
+            f"{GRAPH_BASE}/me/chats",
+            params={"$top": "20", "$filter": "chatType eq 'oneOnOne'"},
+            headers=headers,
+        )
+        if resp.status_code == 401:
+            raise TokenExpiredError("Agent User token expired — re-acquire via three-hop flow")
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", "60"))
+            raise RateLimitError(retry_after)
+        if resp.status_code != 200:
+            return []
+
+        chats = resp.json().get("value", [])
+
+        for chat in chats:
+            chat_id = chat.get("id", "")
+            if not chat_id:
+                continue
+
+            msg_resp = await client.get(
+                f"{GRAPH_BASE}/chats/{chat_id}/messages",
+                params={"$top": str(count_per_chat), "$orderby": "createdDateTime desc"},
+                headers=headers,
+            )
+            if msg_resp.status_code != 200:
+                continue
+
+            messages = msg_resp.json().get("value", [])
+            for m in messages:
+                all_messages.append({
+                    "message_id": m["id"],
+                    "from": (m.get("from") or {}).get("user", {}).get("displayName", "unknown"),
+                    "content": (m.get("body") or {}).get("content", ""),
+                    "sent_at": m.get("createdDateTime"),
+                    "chat_id": chat_id,
+                })
+
+    return all_messages
+
+
 def filter_human_messages(
     messages: list[dict],
     agent_user_display_name: str,

@@ -243,25 +243,23 @@ async def _background_poll() -> None:
     """
     import asyncio
 
-    from entraclaw.tools.teams import filter_human_messages, read
+    from entraclaw.tools.teams import filter_human_messages, read_all_chats
 
     if logger:
         logger.info("Starting background Teams poll (interval=%ds)", BACKGROUND_POLL_INTERVAL)
 
-    config = _state["config"]
     # Must match the displayName that Graph API returns in message.from.user.displayName
     # NOT the UPN — Graph returns "EntraClaw Agent", not "entraclaw-agent@werner.ac"
     agent_display_name = "EntraClaw Agent"
-    chat_id = str(_state["chat_id"])
 
     # Background poll has its OWN cursor and seen-set (separate from watch_teams_replies)
     bg_seen_ids: set[str] = set()
     bg_last_ts: str | None = None
 
-    # Bootstrap: set watermark to newest existing message
+    # Bootstrap: set watermark to newest messages across ALL chats
     try:
         await _ensure_valid_token()
-        bootstrap_msgs = await _with_token_retry(read, chat_id=chat_id, count=10)
+        bootstrap_msgs = await _with_token_retry(read_all_chats, count_per_chat=5)
         if bootstrap_msgs:
             newest = max(bootstrap_msgs, key=lambda m: m.get("sent_at", ""))
             bg_last_ts = newest["sent_at"]
@@ -276,7 +274,9 @@ async def _background_poll() -> None:
             await asyncio.sleep(BACKGROUND_POLL_INTERVAL)
             await _ensure_valid_token()
 
-            raw_messages = await _with_token_retry(read, chat_id=chat_id, count=10)
+            # Poll ALL 1:1 chats — not just the configured one. This catches
+            # federated/cross-tenant chats that the agent didn't create.
+            raw_messages = await _with_token_retry(read_all_chats, count_per_chat=5)
             human_msgs = filter_human_messages(raw_messages, agent_display_name)
             new_msgs = _filter_new_messages(human_msgs, bg_last_ts, bg_seen_ids)
 
@@ -434,7 +434,6 @@ async def watch_teams_replies(
     if not chat_id:
         return json.dumps({"error": "Teams chat not established. Check setup."})
 
-    config = _state["config"]
     # Must match the displayName that Graph API returns in message.from.user.displayName
     # NOT the UPN — Graph returns "EntraClaw Agent", not "entraclaw-agent@werner.ac"
     agent_display_name = "EntraClaw Agent"
