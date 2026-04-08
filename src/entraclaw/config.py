@@ -77,6 +77,7 @@ class EntraClawConfig:
     human_upns: list[str] = field(default_factory=list)
     human_user_tenant_ids: list[str] = field(default_factory=list)
     human_user_mails: list[str] = field(default_factory=list)
+    human_user_types: list[str] = field(default_factory=list)
     log_dir: Path = field(default_factory=lambda: _default_dir("logs"))
     audit_dir: Path = field(default_factory=lambda: _default_dir("audit"))
     data_dir: Path = field(default_factory=lambda: _default_dir("data"))
@@ -104,6 +105,9 @@ class EntraClawConfig:
                 os.environ.get("ENTRACLAW_HUMAN_USER_TENANT_IDS")
             ),
             human_user_mails=_parse_csv(os.environ.get("ENTRACLAW_HUMAN_USER_MAILS")),
+            human_user_types=_parse_csv_preserve_empty(
+                os.environ.get("ENTRACLAW_HUMAN_USER_TYPES")
+            ),
             log_dir=Path(os.environ.get("ENTRACLAW_LOG_DIR", _default_dir("logs"))),
             audit_dir=Path(os.environ.get("ENTRACLAW_AUDIT_DIR", _default_dir("audit"))),
             data_dir=Path(os.environ.get("ENTRACLAW_DATA_DIR", _default_dir("data"))),

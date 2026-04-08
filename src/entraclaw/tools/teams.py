@@ -172,13 +172,18 @@ async def create_or_find_chat(
     agent_user_id: str | None = None,
     human_user_tenant_ids: list[str] | None = None,
     human_user_mails: list[str] | None = None,
+    human_user_types: list[str] | None = None,
 ) -> dict:
     """Create or resume a Teams chat between the Agent User and human(s).
 
     If one human user is provided, creates a ``oneOnOne`` chat (idempotent).
     If multiple humans are provided, creates a ``group`` chat with a topic.
 
-    For external/guest users, ``human_user_tenant_ids`` provides the home
+    For B2B guest users (``human_user_types`` contains ``"Guest"``), the chat
+    is always created as ``group`` with ``role: "guest"`` for the guest member,
+    matching Graph API Create Chat Example 6.
+
+    For external/federated users, ``human_user_tenant_ids`` provides the home
     tenant GUID (parallel to ``human_user_ids``).  When a tenant ID is
     present the member payload includes ``tenantId`` and the
     ``user@odata.bind`` references the user's email (from
@@ -192,23 +197,36 @@ async def create_or_find_chat(
 
     tenant_ids = human_user_tenant_ids or [""] * len(human_user_ids)
     mails = human_user_mails or [""] * len(human_user_ids)
+    user_types = human_user_types or [""] * len(human_user_ids)
+
+    has_guest = any(t.lower() == "guest" for t in user_types if t and t.lower() != "none")
 
     members: list[dict] = []
     for i, uid in enumerate(human_user_ids):
         tid = tenant_ids[i] if i < len(tenant_ids) else ""
         mail = mails[i] if i < len(mails) else ""
+        utype = user_types[i] if i < len(user_types) else ""
 
-        # For external users with a home tenant ID, use their email
-        # and include tenantId so Graph routes the chat cross-tenant.
-        if tid:
-            user_ref = mail if mail else uid
+        is_guest = utype.lower() == "guest" if utype and utype.lower() != "none" else False
+
+        if is_guest and not tid:
+            # Example 6: B2B guest in our tenant — use guest object ID, role="guest"
             member: dict = {
+                "@odata.type": "#microsoft.graph.aadUserConversationMember",
+                "roles": ["guest"],
+                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{uid}')",
+            }
+        elif tid:
+            # Example 7: Federated user — use email + tenantId, role="owner"
+            user_ref = mail if mail else uid
+            member = {
                 "@odata.type": "#microsoft.graph.aadUserConversationMember",
                 "roles": ["owner"],
                 "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{user_ref}')",
                 "tenantId": tid,
             }
         else:
+            # In-tenant member — use object ID, role="owner"
             member = {
                 "@odata.type": "#microsoft.graph.aadUserConversationMember",
                 "roles": ["owner"],
@@ -227,13 +245,17 @@ async def create_or_find_chat(
             },
         )
 
-    is_group = len(human_user_ids) > 1
+    # B2B guests require chatType="group" (Example 6); oneOnOne only for
+    # same-tenant members or federated users (Example 7).
+    is_group = len(human_user_ids) > 1 or has_guest
     chat_payload: dict = {
         "chatType": "group" if is_group else "oneOnOne",
         "members": members,
     }
     if is_group:
         chat_payload["topic"] = "EntraClaw Agent Chat"
+
+    logger.info("Creating chat — payload: %s", chat_payload)
 
     transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
     async with httpx.AsyncClient(transport=transport) as client:
@@ -255,9 +277,32 @@ async def create_or_find_chat(
         resp.raise_for_status()
 
         chat = resp.json()
-        logger.info("Teams chat established: %s", chat["id"])
+        chat_id = chat["id"]
+        logger.info("Teams chat established: %s (type=%s)", chat_id, chat.get("chatType"))
+
+        # Verify chat members were added correctly
+        try:
+            verify_resp = await client.get(
+                f"{GRAPH_BASE}/chats/{chat_id}/members",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if verify_resp.status_code == 200:
+                actual_members = verify_resp.json().get("value", [])
+                for m in actual_members:
+                    display = m.get("displayName", "?")
+                    roles = m.get("roles", [])
+                    tid = m.get("tenantId", "")
+                    logger.info(
+                        "  Chat member: %s (roles=%s, tenantId=%s)",
+                        display, roles, tid,
+                    )
+            else:
+                logger.warning("Could not verify chat members: HTTP %d", verify_resp.status_code)
+        except Exception:
+            logger.warning("Chat member verification failed", exc_info=True)
+
         return {
-            "chat_id": chat["id"],
+            "chat_id": chat_id,
             "created_at": chat.get("createdDateTime"),
         }
 

@@ -164,12 +164,14 @@ HUMAN_USER_IDS=""
 HUMAN_UPNS=""
 HUMAN_USER_TENANT_IDS=""
 HUMAN_USER_MAILS=""
+HUMAN_USER_TYPES=""
 if [ -n "$TEAMS_USER_EMAIL" ]; then
     IFS=',' read -ra TEAMS_USERS <<< "$TEAMS_USER_EMAIL"
     RESOLVED_IDS=()
     RESOLVED_UPNS=()
     RESOLVED_TENANT_IDS=()
     RESOLVED_MAILS=()
+    RESOLVED_TYPES=()
     for TU in "${TEAMS_USERS[@]}"; do
         TU=$(echo "$TU" | xargs)  # trim whitespace
         # Query user details including userType and mail for guest detection
@@ -178,15 +180,26 @@ if [ -n "$TEAMS_USER_EMAIL" ]; then
             fail "Could not find Teams user '$TU' in Entra. Check the email/ID."
         fi
         TU_ID=$(echo "$TU_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
-        TU_TYPE=$(echo "$TU_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['userType'])")
+        TU_TYPE=$(echo "$TU_JSON" | python3 -c "import sys,json; v=json.load(sys.stdin)['userType']; print(v if v else '')")
         TU_MAIL=$(echo "$TU_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('mail') or '')")
         TU_UPN=$(echo "$TU_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['upn'])")
+
+        # If userType is null/empty, infer from UPN pattern (#EXT# = guest)
+        if [ -z "$TU_TYPE" ]; then
+            if echo "$TU_UPN" | grep -q '#EXT#'; then
+                TU_TYPE="Guest"
+            else
+                TU_TYPE="Member"
+            fi
+        fi
 
         RESOLVED_IDS+=("$TU_ID")
         RESOLVED_UPNS+=("$TU")
         RESOLVED_MAILS+=("$TU_MAIL")
+        RESOLVED_TYPES+=("$TU_TYPE")
 
         if [ "$TU_TYPE" = "Guest" ]; then
+            success "  User '$TU' is a B2B Guest — will use role='guest' in chat"
             # Extract home domain from UPN: user_domain.com#EXT#@tenant.onmicrosoft.com
             HOME_DOMAIN=$(echo "$TU_UPN" | python3 -c "
 import sys
@@ -225,6 +238,7 @@ else:
     HUMAN_UPNS=$(IFS=','; echo "${RESOLVED_UPNS[*]}")
     HUMAN_USER_TENANT_IDS=$(IFS=','; echo "${RESOLVED_TENANT_IDS[*]}")
     HUMAN_USER_MAILS=$(IFS=','; echo "${RESOLVED_MAILS[*]}")
+    HUMAN_USER_TYPES=$(IFS=','; echo "${RESOLVED_TYPES[*]}")
     # First user is the primary (backward compat)
     HUMAN_USER_ID="${RESOLVED_IDS[0]}"
     HUMAN_UPN="${RESOLVED_UPNS[0]}"
@@ -232,13 +246,14 @@ else:
     if [ ${#TEAMS_USERS[@]} -gt 1 ]; then
         success "Teams users: $HUMAN_UPNS (group chat)"
     else
-        success "Teams user: $HUMAN_UPN ($HUMAN_USER_ID)"
+        success "Teams user: $HUMAN_UPN ($HUMAN_USER_ID) [type: ${RESOLVED_TYPES[0]}]"
     fi
 else
     HUMAN_USER_IDS="$HUMAN_USER_ID"
     HUMAN_UPNS="$HUMAN_UPN"
     HUMAN_USER_TENANT_IDS=""
     HUMAN_USER_MAILS="$HUMAN_UPN"
+    HUMAN_USER_TYPES="Member"
     success "Human user: $HUMAN_UPN ($HUMAN_USER_ID)"
 fi
 
@@ -448,6 +463,7 @@ ENTRACLAW_HUMAN_USER_IDS=$HUMAN_USER_IDS
 ENTRACLAW_HUMAN_UPNS=$HUMAN_UPNS
 ENTRACLAW_HUMAN_USER_TENANT_IDS=$HUMAN_USER_TENANT_IDS
 ENTRACLAW_HUMAN_USER_MAILS=$HUMAN_USER_MAILS
+ENTRACLAW_HUMAN_USER_TYPES=$HUMAN_USER_TYPES
 ENTRACLAW_PROVISIONER_APP_ID=$PROV_CLIENT_ID
 ENTRACLAW_LOG_LEVEL=INFO
 EOF

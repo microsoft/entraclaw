@@ -241,14 +241,18 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 **Implications:** `ctx.sample()` could theoretically let `watch_teams_replies` re-engage the LLM when a reply arrives — but this is untested with Claude Code's MCP client and likely unsupported. `ctx.set_state()`/`ctx.get_state()` could replace our manual `_state` dict for cursor and seen-set management in a future refactor.
 **Prevention:** Before building custom infrastructure, always check what the framework provides. FastMCP's Context is much richer than we initially used.
 
-### Learning #28: Graph API Create Chat Requires `tenantId` for Guest/External Users
+### Learning #28: B2B Guest Chat Requires `role: "guest"` and `chatType: "group"`
 
 **Date:** 2026-04-07
 **Context:** Messaging Microsoft employees invited as B2B guests into the werner.ac tenant
 **Problem:** `POST /chats` returned 200 and `POST /chats/{id}/messages` returned 200, but the external user never received the messages. First chat creation triggered a one-time email notification, but subsequent messages were invisible to the recipient.
-**Root cause:** The Graph API `Create chat` has two patterns for external users (Examples 6 and 7 in the docs). For federated/external users, the `aadUserConversationMember` must include `"tenantId"` with the user's home tenant GUID, and `user@odata.bind` should reference their email (not the guest object ID). Without `tenantId`, Graph creates a "phantom chat" — it exists in the calling tenant but is not properly routed cross-tenant.
-**Fix:** In `setup.sh`, detect `userType: Guest` via `az ad user show`, extract the home domain from the UPN pattern (`user_domain.com#EXT#@tenant.onmicrosoft.com`), look up the tenant GUID via OpenID discovery (`https://login.microsoftonline.com/{domain}/.well-known/openid-configuration`), and pass it through config → `create_or_find_chat()` → Graph API payload.
-**Prevention:** Always check `userType` before creating chats. Graph API returns 200 for malformed cross-tenant chats — the only symptom is silent message loss on the receiving end.
+**Root cause (multi-part):**
+1. The Graph API docs state: *"In-tenant guest users must be assigned the `guest` role."* We were using `role: "owner"` for everyone.
+2. Example 6 (the B2B guest pattern) requires `chatType: "group"` — oneOnOne chats with guest role don't work.
+3. The old phantom oneOnOne chat gets reused due to deduplication ("If a one-on-one chat already exists, this operation returns the existing chat"), so even fixing the code wouldn't help until chatType changes from `oneOnOne` to `group`.
+4. There are TWO distinct patterns: Example 6 (B2B guest in your tenant: guest object ID, role="guest", chatType="group") and Example 7 (federated user not in your tenant: their home ID, tenantId, role="owner").
+**Fix:** Detect `userType` during setup, pass it to `create_or_find_chat()`, use `role: "guest"` + `chatType: "group"` for B2B guests (Example 6). Keep `role: "owner"` + `tenantId` for federated users (Example 7).
+**Prevention:** Always check `userType` before creating chats. Graph API returns 200 for malformed chats — the only symptom is silent message loss. The two patterns (Example 6 vs 7) are NOT interchangeable.
 
 ---
 

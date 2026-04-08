@@ -207,6 +207,7 @@ async def _initialize() -> None:
                 agent_user_id=config.agent_user_id,
                 human_user_tenant_ids=config.human_user_tenant_ids,
                 human_user_mails=config.human_user_mails,
+                human_user_types=config.human_user_types,
             )
             _state["chat_id"] = chat["chat_id"]
         except EntraClawError as exc:

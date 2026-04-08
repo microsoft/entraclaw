@@ -107,3 +107,20 @@ class TestEntraClawConfig:
             cfg = EntraClawConfig.from_env()
         assert cfg.human_user_tenant_ids == []
         assert cfg.human_user_mails == []
+
+    def test_user_types_parsed_from_env(self) -> None:
+        """ENTRACLAW_HUMAN_USER_TYPES CSV is parsed preserving empty entries."""
+        env = {
+            "ENTRACLAW_HUMAN_USER_TYPES": "Guest,,Member",
+            "ENTRACLAW_HUMAN_USER_IDS": "guest-id,member-id,member2-id",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            cfg = EntraClawConfig.from_env()
+        assert cfg.human_user_types == ["Guest", "", "Member"]
+
+    def test_user_types_empty_when_not_set(self) -> None:
+        """Missing ENTRACLAW_HUMAN_USER_TYPES defaults to empty list."""
+        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRACLAW_")}
+        with patch.dict(os.environ, cleaned, clear=True):
+            cfg = EntraClawConfig.from_env()
+        assert cfg.human_user_types == []

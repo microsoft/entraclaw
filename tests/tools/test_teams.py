@@ -362,6 +362,104 @@ class TestCreateOrFindChat:
         # Uses object ID, not email
         assert "local-uid" in human_members[0]["user@odata.bind"]
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_guest_user_gets_guest_role_and_group_chat(self) -> None:
+        """B2B guest users must get role='guest' and chatType='group' (Example 6).
+
+        The Graph API docs state: 'In-tenant guest users must be assigned the
+        guest role.'  Example 6 shows the only pattern for guest role uses
+        chatType='group'.  Without this, the API creates a phantom chat that
+        silently drops messages.
+        """
+        route = respx.post(f"{GRAPH_BASE}/chats").mock(
+            return_value=httpx.Response(
+                201,
+                json={"id": "19:guest-group@thread.v2", "createdDateTime": "2024-01-01"},
+            )
+        )
+        result = await create_or_find_chat(
+            token="agent-token",
+            human_user_ids=["guest-obj-id"],
+            agent_user_id="agent-user-id",
+            human_user_types=["Guest"],
+        )
+        assert result["chat_id"] == "19:guest-group@thread.v2"
+        import json
+
+        body = json.loads(route.calls.last.request.content)
+        # Must be group chat (not oneOnOne) for guest role
+        assert body["chatType"] == "group"
+        assert "topic" in body
+        # Find the guest member
+        guest_members = [
+            m for m in body["members"] if "guest-obj-id" in m.get("user@odata.bind", "")
+        ]
+        assert len(guest_members) == 1
+        assert guest_members[0]["roles"] == ["guest"]
+        # Uses guest object ID (from our tenant), no tenantId needed
+        assert "guest-obj-id" in guest_members[0]["user@odata.bind"]
+        assert "tenantId" not in guest_members[0]
+        # Agent user should still be owner
+        agent_members = [
+            m for m in body["members"] if "agent-user-id" in m.get("user@odata.bind", "")
+        ]
+        assert len(agent_members) == 1
+        assert agent_members[0]["roles"] == ["owner"]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_mixed_member_and_guest_types(self) -> None:
+        """Group chat with both a Member and a Guest user."""
+        route = respx.post(f"{GRAPH_BASE}/chats").mock(
+            return_value=httpx.Response(
+                201,
+                json={"id": "19:mixed@thread.v2", "createdDateTime": "2024-01-01"},
+            )
+        )
+        await create_or_find_chat(
+            token="agent-token",
+            human_user_ids=["member-uid", "guest-uid"],
+            human_user_types=["Member", "Guest"],
+        )
+        import json
+
+        body = json.loads(route.calls.last.request.content)
+        # Must be group (has a guest)
+        assert body["chatType"] == "group"
+        member_entry = [
+            m for m in body["members"] if "member-uid" in m.get("user@odata.bind", "")
+        ]
+        assert member_entry[0]["roles"] == ["owner"]
+        guest_entry = [
+            m for m in body["members"] if "guest-uid" in m.get("user@odata.bind", "")
+        ]
+        assert guest_entry[0]["roles"] == ["guest"]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_no_user_types_defaults_to_owner(self) -> None:
+        """When human_user_types is not provided, all users default to 'owner' role."""
+        route = respx.post(f"{GRAPH_BASE}/chats").mock(
+            return_value=httpx.Response(
+                201,
+                json={"id": "19:default@thread.v2", "createdDateTime": "2024-01-01"},
+            )
+        )
+        await create_or_find_chat(
+            token="agent-token",
+            human_user_ids=["user-1"],
+        )
+        import json
+
+        body = json.loads(route.calls.last.request.content)
+        # Single user without types → oneOnOne, owner role
+        assert body["chatType"] == "oneOnOne"
+        human_members = [
+            m for m in body["members"] if "user-1" in m.get("user@odata.bind", "")
+        ]
+        assert human_members[0]["roles"] == ["owner"]
+
 
 # ---------------------------------------------------------------------------
 # send
