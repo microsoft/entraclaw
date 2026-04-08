@@ -199,21 +199,35 @@ async def _initialize() -> None:
     _state["config"] = config
 
     # Create / find the Teams chat (requires at least one human user ID)
+    chat_id_file = config.data_dir / "chat_id"
     if config.human_user_ids:
-        try:
-            chat = await create_or_find_chat(
-                token=token,
-                human_user_ids=config.human_user_ids,
-                agent_user_id=config.agent_user_id,
-                human_user_tenant_ids=config.human_user_tenant_ids,
-                human_user_mails=config.human_user_mails,
-                human_user_types=config.human_user_types,
-            )
-            _state["chat_id"] = chat["chat_id"]
-        except EntraClawError as exc:
-            # Non-fatal: Teams chat is optional (audit still works)
-            if logger:
-                logger.warning("Could not set up Teams chat: %s", exc)
+        # Reuse persisted chat ID if available (avoids creating duplicate group chats)
+        saved_chat_id = None
+        if chat_id_file.is_file():
+            saved_chat_id = chat_id_file.read_text().strip()
+            if saved_chat_id:
+                if logger:
+                    logger.info("Reusing persisted chat: %s", saved_chat_id)
+                _state["chat_id"] = saved_chat_id
+
+        if not _state.get("chat_id"):
+            try:
+                chat = await create_or_find_chat(
+                    token=token,
+                    human_user_ids=config.human_user_ids,
+                    agent_user_id=config.agent_user_id,
+                    human_user_tenant_ids=config.human_user_tenant_ids,
+                    human_user_mails=config.human_user_mails,
+                    human_user_types=config.human_user_types,
+                )
+                _state["chat_id"] = chat["chat_id"]
+                # Persist for next restart
+                chat_id_file.parent.mkdir(parents=True, exist_ok=True)
+                chat_id_file.write_text(chat["chat_id"])
+            except EntraClawError as exc:
+                # Non-fatal: Teams chat is optional (audit still works)
+                if logger:
+                    logger.warning("Could not set up Teams chat: %s", exc)
     else:
         if logger:
             logger.warning("ENTRACLAW_HUMAN_USER_ID not set — Teams tools will not work")
