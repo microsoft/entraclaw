@@ -315,6 +315,63 @@ async def create_or_find_chat(
         }
 
 
+async def add_member(
+    *,
+    chat_id: str,
+    token: str,
+    email: str,
+    tenant_id: str | None = None,
+) -> dict:
+    """Add a user to an existing Teams chat.
+
+    For external/federated users, provide ``tenant_id`` (their home tenant
+    GUID).  Graph resolves the email cross-tenant via Example 7.
+
+    For in-tenant members, omit ``tenant_id``.
+    """
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    member_payload: dict = {
+        "@odata.type": "#microsoft.graph.aadUserConversationMember",
+        "roles": ["owner"],
+        "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{email}')",
+    }
+    if tenant_id:
+        member_payload["tenantId"] = tenant_id
+
+    logger.info("Adding member to chat %s: %s (tenant=%s)", chat_id, email, tenant_id)
+
+    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    async with httpx.AsyncClient(transport=transport) as client:
+        resp = await client.post(
+            f"{GRAPH_BASE}/chats/{chat_id}/members",
+            json=member_payload,
+            headers=headers,
+        )
+        if resp.status_code == 404:
+            error_body = resp.json().get("error", {})
+            error_msg = error_body.get("message", resp.text)
+            raise ChatNotFound(f"Could not add member: {error_msg}")
+        if resp.status_code == 401:
+            raise TokenExpiredError("Agent User token expired — re-acquire via three-hop flow")
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", "60"))
+            raise RateLimitError(retry_after)
+        resp.raise_for_status()
+
+        result = resp.json()
+        display_name = result.get("displayName", email)
+        logger.info("Member added: %s", display_name)
+        return {
+            "member_id": result.get("id"),
+            "display_name": display_name,
+            "roles": result.get("roles", []),
+        }
+
+
 async def send(
     *,
     chat_id: str,

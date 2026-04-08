@@ -379,6 +379,38 @@ async def send_teams_message(message: str, content_type: str = "text") -> str:
 
 
 @mcp.tool()
+async def add_teams_member(email: str, tenant_id: str = "") -> str:
+    """Add a new member to the current Teams chat without restarting.
+
+    For external users (B2B guests from another org), provide their
+    email and home tenant_id. For in-tenant members, just provide email.
+
+    Args:
+        email: The user's email address (e.g., 'user@microsoft.com').
+        tenant_id: The user's home tenant GUID (required for external users).
+            Find it via: https://login.microsoftonline.com/{domain}/.well-known/openid-configuration
+
+    Returns:
+        JSON with member_id, display_name, and roles.
+    """
+    await _initialize()
+    from entraclaw.tools.teams import add_member
+
+    chat_id = _state.get("chat_id")
+    if not chat_id:
+        return json.dumps({"error": "Teams chat not established. Check setup."})
+
+    await _ensure_valid_token()
+    result = await _with_token_retry(
+        add_member,
+        chat_id=str(chat_id),
+        email=email,
+        tenant_id=tenant_id or None,
+    )
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
 async def read_teams_messages(count: int = 5) -> str:
     """Read recent messages from the human in Microsoft Teams. Use this to
     check for replies, commands, or responses from the human user.

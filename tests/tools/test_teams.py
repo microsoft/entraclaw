@@ -466,6 +466,97 @@ class TestCreateOrFindChat:
 
 
 # ---------------------------------------------------------------------------
+# add_member
+# ---------------------------------------------------------------------------
+
+
+class TestAddMember:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_add_federated_member(self) -> None:
+        """Add a federated user to an existing chat."""
+        from entraclaw.tools.teams import add_member
+
+        route = respx.post(
+            f"{GRAPH_BASE}/chats/19:chat-id@thread.v2/members"
+        ).mock(
+            return_value=httpx.Response(
+                201,
+                json={
+                    "id": "member-id-123",
+                    "displayName": "New User",
+                    "roles": ["owner"],
+                },
+            )
+        )
+        result = await add_member(
+            chat_id="19:chat-id@thread.v2",
+            token="agent-token",
+            email="newuser@microsoft.com",
+            tenant_id="72f988bf-86f1-41af-91ab-2d7cd011db47",
+        )
+        assert result["display_name"] == "New User"
+        import json
+
+        body = json.loads(route.calls.last.request.content)
+        assert body["tenantId"] == "72f988bf-86f1-41af-91ab-2d7cd011db47"
+        assert "newuser@microsoft.com" in body["user@odata.bind"]
+        assert body["roles"] == ["owner"]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_add_in_tenant_member(self) -> None:
+        """Add an in-tenant member by object ID (no tenantId)."""
+        from entraclaw.tools.teams import add_member
+
+        route = respx.post(
+            f"{GRAPH_BASE}/chats/19:chat-id@thread.v2/members"
+        ).mock(
+            return_value=httpx.Response(
+                201,
+                json={
+                    "id": "member-id-456",
+                    "displayName": "Local User",
+                    "roles": ["owner"],
+                },
+            )
+        )
+        result = await add_member(
+            chat_id="19:chat-id@thread.v2",
+            token="agent-token",
+            email="local@werner.ac",
+        )
+        assert result["display_name"] == "Local User"
+        import json
+
+        body = json.loads(route.calls.last.request.content)
+        assert "tenantId" not in body
+        assert "local@werner.ac" in body["user@odata.bind"]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_add_member_404(self) -> None:
+        """404 when user email doesn't resolve."""
+        from entraclaw.tools.teams import add_member
+
+        respx.post(
+            f"{GRAPH_BASE}/chats/19:chat-id@thread.v2/members"
+        ).mock(
+            return_value=httpx.Response(
+                404,
+                json={"error": {"message": "User not found"}},
+            )
+        )
+        with pytest.raises(ChatNotFound):
+            await add_member(
+                chat_id="19:chat-id@thread.v2",
+                token="agent-token",
+                email="nobody@microsoft.com",
+                tenant_id="72f988bf-86f1-41af-91ab-2d7cd011db47",
+            )
+
+
+# ---------------------------------------------------------------------------
 # send
 # ---------------------------------------------------------------------------
 
