@@ -352,8 +352,11 @@ async def add_member(
             headers=headers,
         )
         if resp.status_code == 404:
-            error_body = resp.json().get("error", {})
-            error_msg = error_body.get("message", resp.text)
+            try:
+                error_body = resp.json().get("error", {})
+                error_msg = error_body.get("message", resp.text)
+            except Exception:
+                error_msg = resp.text or "Not found"
             raise ChatNotFound(f"Could not add member: {error_msg}")
         if resp.status_code == 401:
             raise TokenExpiredError("Agent User token expired — re-acquire via three-hop flow")
@@ -362,13 +365,18 @@ async def add_member(
             raise RateLimitError(retry_after)
         resp.raise_for_status()
 
-        result = resp.json()
-        display_name = result.get("displayName", email)
+        # POST /members may return 201 with empty body
+        if resp.text.strip():
+            result = resp.json()
+            display_name = result.get("displayName", email)
+        else:
+            result = {}
+            display_name = email
         logger.info("Member added: %s", display_name)
         return {
-            "member_id": result.get("id"),
+            "member_id": result.get("id", ""),
             "display_name": display_name,
-            "roles": result.get("roles", []),
+            "roles": result.get("roles", ["owner"]),
         }
 
 
