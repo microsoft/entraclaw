@@ -271,6 +271,14 @@ async def create_or_find_chat(
             )
         if resp.status_code == 401:
             raise TokenExpiredError("Agent User token expired — re-acquire via three-hop flow")
+        if resp.status_code == 404:
+            error_body = resp.json().get("error", {})
+            error_msg = error_body.get("message", resp.text)
+            raise ChatNotFound(
+                f"Chat creation failed (404): {error_msg}. "
+                "This usually means a federated user's email doesn't match "
+                "their actual UPN. Check ENTRACLAW_HUMAN_USER_MAILS in .env."
+            )
         if resp.status_code == 429:
             retry_after = int(resp.headers.get("Retry-After", "60"))
             raise RateLimitError(retry_after)
