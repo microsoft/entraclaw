@@ -17,4 +17,5 @@ venv/
 .mypy_cache/
 .pyright/
 .openclaw-state.json
+.entraclaw-state.json
 .mcp.json
