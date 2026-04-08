@@ -2,7 +2,7 @@
 
 **Date:** April 7, 2026
 **Team:** Brandon Werner
-**Status:** Full bidirectional Teams channel working — background poll + push notifications. Certificate auth (no secrets on disk). 89 tests, 91% coverage. 5 MCP tools + background channel.
+**Status:** Full bidirectional Teams channel working — background poll + push notifications. Certificate auth (no secrets on disk). Multi-user group chats with cross-tenant federation. 110 tests. 6 MCP tools + background channel.
 
 ---
 
@@ -24,11 +24,12 @@ A proof-of-concept demonstrating that **device-local AI agents can have their ow
 | 4. `read_teams_messages` | Agent reads human's replies from Teams | ✅ Working |
 | 5. Bidirectional loop | Agent polls for replies, acts on instructions, reports back | ✅ Working |
 
-### MCP Tools (5 total)
+### MCP Tools (6 total)
 
 | Tool | Purpose | Status |
 |------|---------|--------|
-| `send_teams_message` | Send message to human in Teams | ✅ Live (+ token refresh) |
+| `send_teams_message` | Send message to chat in Teams (text or HTML) | ✅ Live (+ token refresh) |
+| `add_teams_member` | Add user to chat (cross-tenant auto-resolved) | ✅ Live |
 | `read_teams_messages` | Read human's replies from Teams | ✅ Live (+ token refresh) |
 | `watch_teams_replies` | Poll for new human replies with dedup | ✅ Live |
 | `whoami` | Show agent identity and connection status | ✅ Live |
@@ -39,9 +40,7 @@ A proof-of-concept demonstrating that **device-local AI agents can have their ow
 ## TDD Status
 
 ```
-89 passed in 2.32s
-
-Coverage: 91% (threshold: 80%)
+110 passed
 
 Name                                Stmts   Miss  Cover
 -----------------------------------------------------------------
@@ -124,7 +123,12 @@ Researched 12+ MCP messaging servers (Slack, iMessage, Discord, Teams). Key find
 - Message dedup: 2s overlap window + bounded seen-set (imessage-kit pattern)
 - 429 rate limit handling propagates through polling tool
 - Autonomous agent instructions — acts on Teams messages without terminal prompting
-- All code passes ruff lint + format, 91% coverage
+- Multi-user group chat support (setup.sh `--teams-user=user1,user2`)
+- Cross-tenant federated chats for B2B guests (auto-detects guest UPN, resolves home tenant via OpenID discovery)
+- `add_teams_member` tool — add users to chat at runtime without restart (auto-resolves tenant from email domain)
+- Chat ID persistence across restarts — no duplicate group chats
+- 429 rate limit handling with Retry-After propagation
+- All code passes ruff lint + format
 
 ### What's Not Started
 - Windows VM provisioning and testing
@@ -191,7 +195,7 @@ Blueprint (client_credentials)
 | 13 | stderr swallowed throughout scripts | Hidden errors | Removed all `2>/dev/null` |
 | 14 | Admin and Teams user conflated | Wrong recipient | Added `--teams-user` flag |
 
-See `docs/runbooks/hard-won-learnings.md` for the full append-only log (27 entries).
+See `docs/runbooks/hard-won-learnings.md` for the full append-only log (29 entries).
 
 ---
 

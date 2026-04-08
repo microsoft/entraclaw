@@ -2,7 +2,7 @@
 
 Research project for securing agentic workflows on local devices (Mac/Linux/Windows) using Microsoft Entra Agent IDs and Agent Users. Agents get their own identity — a real Entra user account with Teams presence, mailbox, and M365 license — so audit logs always distinguish agent actions from human actions.
 
-**The demo:** Tell your AI agent to do something and message you on Teams. Go to a bar. Reply from your phone. The agent acts on your instruction autonomously and reports back. Fully bidirectional, no human at the terminal.
+**The demo:** Tell your AI agent to do something and message you on Teams. Go to a bar. Reply from your phone. The agent acts on your instruction autonomously and reports back. Fully bidirectional, no human at the terminal. Supports multi-user group chats with cross-tenant federated users — add anyone from any org.
 
 ## Getting Started
 
@@ -24,13 +24,23 @@ This script will:
 1. Create a dedicated provisioner app registration (avoids Azure CLI token rejection)
 2. Create an Agent Identity Blueprint + BlueprintPrincipal + Agent Identity
 3. Create an Agent User (Entra user account linked to the Agent Identity)
-4. Grant consent for Teams/Chat Graph permissions
-5. Generate a self-signed certificate, upload public key to Entra, store private key in OS keystore (Keychain/TPM/Keyring) — no secrets on disk
-6. Write `.env` with configuration (no secrets — only the cert thumbprint)
+4. Auto-assign a Teams-capable M365 license (scans tenant for E3/E5/Teams Enterprise)
+5. Grant consent for Teams/Chat Graph permissions
+6. Generate a self-signed certificate, upload public key to Entra, store private key in OS keystore (Keychain/TPM/Keyring) — no secrets on disk
+7. Write `.env` with configuration (no secrets — only the cert thumbprint)
+8. Write `.mcp.json` for auto-discovery by Claude Code / Copilot CLI
 
-The script is **idempotent** — safe to re-run. State persists in `.openclaw-state.json`.
+The script is **idempotent** — safe to re-run. State persists in `.entraclaw-state.json`.
 
-After setup, **assign an M365 license** (E3/E5/Teams Enterprise) to the Agent User in the Entra admin center and wait 10-15 minutes for Teams provisioning.
+#### Multi-user and cross-tenant setup
+
+To start a group chat with multiple users (including B2B guests from other orgs):
+
+```bash
+./scripts/setup.sh --teams-user=user1@yourorg.com,guest@external.com
+```
+
+The script auto-detects guest users via their UPN pattern, resolves their home tenant via OpenID discovery, and creates a federated group chat (Graph API Example 7). No manual tenant ID lookup needed.
 
 ### Run with Claude Code
 
@@ -50,11 +60,12 @@ copilot
 
 Note: Without `--dangerously-load-development-channels`, the agent won't receive push notifications for Teams replies. Use `watch_teams_replies` for explicit polling instead.
 
-### MCP Tools (5 total)
+### MCP Tools (6 total)
 
 | Tool | Purpose |
 |------|---------|
-| `send_teams_message` | Send a message to the human via Teams |
+| `send_teams_message` | Send a message to the chat via Teams (text or HTML) |
+| `add_teams_member` | Add a user to the chat (cross-tenant auto-resolved) |
 | `watch_teams_replies` | Poll for new human replies with dedup |
 | `read_teams_messages` | Read recent message history |
 | `whoami` | Check agent identity and connection status |
@@ -120,7 +131,7 @@ pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v
 ruff check . && ruff format .
 ```
 
-Current status: **89 tests passing, 91% coverage**.
+Current status: **110 tests passing**.
 
 ## Repository Map
 

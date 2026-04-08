@@ -29,7 +29,7 @@
 
 - `docs/index.md`
 - `docs/engineering-status.md`
-- `docs/runbooks/hard-won-learnings.md` (27 entries — read before making changes)
+- `docs/runbooks/hard-won-learnings.md` (29 entries — read before making changes)
 - `docs/decisions/001-obo-flows-for-device-agents.md`
 - `docs/decisions/003-certificate-auth-over-client-secrets.md`
 - `docs/platform-learnings/mcp-close-the-loop.md`
@@ -61,10 +61,10 @@ pip install mkdocs-material && mkdocs serve
 
 - `src/openclaw/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations
 - `src/openclaw/auth/`: Certificate-based JWT assertion builder — `build_client_assertion()`, `compute_cert_thumbprint()`
-- `src/openclaw/tools/teams.py`: Three-hop token flow + Teams Graph API (send, read, filter, chat creation)
-- `src/openclaw/mcp_server.py`: FastMCP server — 5 tools + background poll + channel push + token refresh
+- `src/openclaw/tools/teams.py`: Three-hop token flow + Teams Graph API (send, read, filter, chat creation, add members cross-tenant)
+- `src/entraclaw/mcp_server.py`: FastMCP server — 6 tools + background poll + channel push + token refresh
 - `docs/decisions/`: ADRs — every significant architectural choice is recorded here
-- `docs/runbooks/hard-won-learnings.md`: 27 hard-won learnings — READ THIS before making changes
+- `docs/runbooks/hard-won-learnings.md`: 29 hard-won learnings — READ THIS before making changes
 
 ## gstack
 
