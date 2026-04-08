@@ -241,29 +241,25 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 **Implications:** `ctx.sample()` could theoretically let `watch_teams_replies` re-engage the LLM when a reply arrives — but this is untested with Claude Code's MCP client and likely unsupported. `ctx.set_state()`/`ctx.get_state()` could replace our manual `_state` dict for cursor and seen-set management in a future refactor.
 **Prevention:** Before building custom infrastructure, always check what the framework provides. FastMCP's Context is much richer than we initially used.
 
-### Learning #28: B2B Guest Chat Requires `role: "guest"` and `chatType: "group"`
+### Learning #28: B2B Guest Messaging Requires Federated Chat (Example 7), NOT Guest Role (Example 6)
 
-**Date:** 2026-04-07
+**Date:** 2026-04-07 (updated 2026-04-08)
 **Context:** Messaging Microsoft employees invited as B2B guests into the werner.ac tenant
-**Problem:** `POST /chats` returned 200 and `POST /chats/{id}/messages` returned 200, but the external user never received the messages. First chat creation triggered a one-time email notification, but subsequent messages were invisible to the recipient.
-**Root cause (multi-part):**
-1. The Graph API docs state: *"In-tenant guest users must be assigned the `guest` role."* We were using `role: "owner"` for everyone.
-2. Example 6 (the B2B guest pattern) requires `chatType: "group"` — oneOnOne chats with guest role don't work.
-3. The old phantom oneOnOne chat gets reused due to deduplication ("If a one-on-one chat already exists, this operation returns the existing chat"), so even fixing the code wouldn't help until chatType changes from `oneOnOne` to `group`.
-4. There are TWO distinct patterns: Example 6 (B2B guest in your tenant: guest object ID, role="guest", chatType="group") and Example 7 (federated user not in your tenant: their home ID, tenantId, role="owner").
-5. `az ad user show` can return `userType: null` for guests — Python `print(None)` outputs literal `"None"` which silently bypasses guest detection. Must convert null → empty string, then fall back to checking UPN for `#EXT#` pattern.
-6. B2B guest chats live in the **inviting tenant** — the guest must switch organizations in their Teams client to see them. Teams does NOT reliably push notifications for guest-tenant chats.
-**Fix:** Detect `userType` during setup (with null fallback via `#EXT#` UPN check), pass it to `create_or_find_chat()`, use `role: "guest"` + `chatType: "group"` for B2B guests (Example 6). Keep `role: "owner"` + `tenantId` for federated users (Example 7).
-**Prevention:** Always check `userType` before creating chats. Graph API returns 200 for malformed chats — the only symptom is silent message loss. The two patterns (Example 6 vs 7) are NOT interchangeable. Tell B2B guests to switch to the inviting org in Teams.
-
-### Learning #29: B2B Guest Chats Live in the Inviting Tenant Only
-
-**Date:** 2026-04-08
-**Context:** Chat creation and message send both return 200, members verified via GET /chats/{id}/members, but guest user says "nothing received"
-**Problem:** After fixing role/chatType (Learning #28), the diagnostic confirmed the chat was properly created with the guest member, and the message was sent successfully. But the guest user still saw nothing in their Teams client.
-**Root cause:** B2B guest chats exist in the **inviting tenant's** Teams space, not the guest's home tenant. The guest must open Teams → click avatar → switch to the inviting organization (e.g., "werner.ac") to see the chat. Teams does not reliably send push notifications or emails for guest-tenant activity after the initial invitation.
-**Fix:** Document this behavior. Consider sending an email notification or using a bot-style approach that works cross-tenant.
-**Prevention:** When onboarding B2B guest users, explicitly tell them to switch organizations in Teams. The chat will not appear in their home tenant chat list.
+**Problem:** `POST /chats` returned 200 and `POST /chats/{id}/messages` returned 200, but the external user never received the messages. Tried multiple approaches — all returned 200 but produced invisible chats.
+**Investigation (what DIDN'T work):**
+1. `chatType: "oneOnOne"` + `role: "owner"` + guest object ID → phantom chat, invisible
+2. `chatType: "group"` + `role: "guest"` + guest object ID (Example 6) → chat created with correct members verified via `GET /members`, but completely invisible in Teams
+3. The guest object ID (`963835fc-...`) simply cannot receive Teams messages regardless of role or chatType. Graph API accepts it silently every time.
+**Root cause:** B2B guest objects in your tenant are NOT the same as the real user identity. The guest object ID is a local shadow — Teams doesn't deliver messages to it. You must reference the user by their **home tenant identity** via Example 7 (federated).
+**What WORKS — Example 7 (federated):**
+- `user@odata.bind`: use the user's **email** (e.g., `brandwe@microsoft.com`), NOT the guest object ID
+- `tenantId`: the user's **home tenant GUID** (e.g., `72f988bf-...` for microsoft.com)
+- `role`: `"owner"` (NOT "guest")
+- `chatType`: `"oneOnOne"` works fine
+- Graph resolves the email + tenantId to the user's REAL identity in their home tenant, creating a proper federated chat
+**Additional gotcha:** `az ad user show` can return `userType: null` for guests — Python `print(None)` outputs literal `"None"`. Must convert null → empty string, then fall back to UPN `#EXT#` pattern for guest detection.
+**Fix:** Detect guest via `userType` or `#EXT#` UPN, resolve home tenant GUID via OpenID discovery, use email + tenantId in chat payload (Example 7).
+**Prevention:** Never use the guest object ID for Teams messaging. Always resolve the user's home tenant and use their email as a federated reference.
 
 ---
 

@@ -364,18 +364,18 @@ class TestCreateOrFindChat:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_guest_user_gets_guest_role_and_group_chat(self) -> None:
-        """B2B guest users must get role='guest' and chatType='group' (Example 6).
+    async def test_guest_user_uses_federated_with_tenant_id(self) -> None:
+        """B2B guest users must use Example 7 (federated): email + tenantId + role='owner'.
 
-        The Graph API docs state: 'In-tenant guest users must be assigned the
-        guest role.'  Example 6 shows the only pattern for guest role uses
-        chatType='group'.  Without this, the API creates a phantom chat that
-        silently drops messages.
+        Using the guest object ID with role='guest' (Example 6) creates chats
+        that are invisible to the guest's Teams client.  The correct approach
+        is to reference the user by their home tenant email + tenantId so
+        Graph resolves their real identity cross-tenant.
         """
         route = respx.post(f"{GRAPH_BASE}/chats").mock(
             return_value=httpx.Response(
                 201,
-                json={"id": "19:guest-group@thread.v2", "createdDateTime": "2024-01-01"},
+                json={"id": "19:fed-guest@thread.v2", "createdDateTime": "2024-01-01"},
             )
         )
         result = await create_or_find_chat(
@@ -383,23 +383,22 @@ class TestCreateOrFindChat:
             human_user_ids=["guest-obj-id"],
             agent_user_id="agent-user-id",
             human_user_types=["Guest"],
+            human_user_tenant_ids=["72f988bf-86f1-41af-91ab-2d7cd011db47"],
+            human_user_mails=["user@microsoft.com"],
         )
-        assert result["chat_id"] == "19:guest-group@thread.v2"
+        assert result["chat_id"] == "19:fed-guest@thread.v2"
         import json
 
         body = json.loads(route.calls.last.request.content)
-        # Must be group chat (not oneOnOne) for guest role
-        assert body["chatType"] == "group"
-        assert "topic" in body
-        # Find the guest member
-        guest_members = [
-            m for m in body["members"] if "guest-obj-id" in m.get("user@odata.bind", "")
+        # Must be oneOnOne (not group) — federated, not guest role
+        assert body["chatType"] == "oneOnOne"
+        # Find the guest member — should use email, not guest object ID
+        human_members = [
+            m for m in body["members"] if "user@microsoft.com" in m.get("user@odata.bind", "")
         ]
-        assert len(guest_members) == 1
-        assert guest_members[0]["roles"] == ["guest"]
-        # Uses guest object ID (from our tenant), no tenantId needed
-        assert "guest-obj-id" in guest_members[0]["user@odata.bind"]
-        assert "tenantId" not in guest_members[0]
+        assert len(human_members) == 1
+        assert human_members[0]["roles"] == ["owner"]
+        assert human_members[0]["tenantId"] == "72f988bf-86f1-41af-91ab-2d7cd011db47"
         # Agent user should still be owner
         agent_members = [
             m for m in body["members"] if "agent-user-id" in m.get("user@odata.bind", "")
@@ -410,7 +409,7 @@ class TestCreateOrFindChat:
     @respx.mock
     @pytest.mark.asyncio
     async def test_mixed_member_and_guest_types(self) -> None:
-        """Group chat with both a Member and a Guest user."""
+        """Group chat with both a Member and a Guest user — guest uses federated."""
         route = respx.post(f"{GRAPH_BASE}/chats").mock(
             return_value=httpx.Response(
                 201,
@@ -421,20 +420,25 @@ class TestCreateOrFindChat:
             token="agent-token",
             human_user_ids=["member-uid", "guest-uid"],
             human_user_types=["Member", "Guest"],
+            human_user_tenant_ids=["", "ext-tenant-id"],
+            human_user_mails=["brandon@werner.ac", "guest@external.com"],
         )
         import json
 
         body = json.loads(route.calls.last.request.content)
-        # Must be group (has a guest)
+        # Group because 2 humans
         assert body["chatType"] == "group"
         member_entry = [
             m for m in body["members"] if "member-uid" in m.get("user@odata.bind", "")
         ]
         assert member_entry[0]["roles"] == ["owner"]
+        assert "tenantId" not in member_entry[0]
+        # Guest uses federated: email + tenantId
         guest_entry = [
-            m for m in body["members"] if "guest-uid" in m.get("user@odata.bind", "")
+            m for m in body["members"] if "guest@external.com" in m.get("user@odata.bind", "")
         ]
-        assert guest_entry[0]["roles"] == ["guest"]
+        assert guest_entry[0]["roles"] == ["owner"]
+        assert guest_entry[0]["tenantId"] == "ext-tenant-id"
 
     @respx.mock
     @pytest.mark.asyncio

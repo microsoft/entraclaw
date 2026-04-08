@@ -199,8 +199,6 @@ async def create_or_find_chat(
     mails = human_user_mails or [""] * len(human_user_ids)
     user_types = human_user_types or [""] * len(human_user_ids)
 
-    has_guest = any(t.lower() == "guest" for t in user_types if t and t.lower() != "none")
-
     members: list[dict] = []
     for i, uid in enumerate(human_user_ids):
         tid = tenant_ids[i] if i < len(tenant_ids) else ""
@@ -209,15 +207,19 @@ async def create_or_find_chat(
 
         is_guest = utype.lower() == "guest" if utype and utype.lower() != "none" else False
 
-        if is_guest and not tid:
-            # Example 6: B2B guest in our tenant — use guest object ID, role="guest"
+        if is_guest and tid and mail:
+            # Example 7: B2B guest → federated via home tenant.
+            # Uses the user's email + home tenantId so Graph resolves
+            # their real identity (not the guest object, which is invisible
+            # to Teams).  Role must be "owner" per the docs.
             member: dict = {
                 "@odata.type": "#microsoft.graph.aadUserConversationMember",
-                "roles": ["guest"],
-                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{uid}')",
+                "roles": ["owner"],
+                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{mail}')",
+                "tenantId": tid,
             }
         elif tid:
-            # Example 7: Federated user — use email + tenantId, role="owner"
+            # Example 7: Non-guest federated user — email + tenantId
             user_ref = mail if mail else uid
             member = {
                 "@odata.type": "#microsoft.graph.aadUserConversationMember",
@@ -245,9 +247,7 @@ async def create_or_find_chat(
             },
         )
 
-    # B2B guests require chatType="group" (Example 6); oneOnOne only for
-    # same-tenant members or federated users (Example 7).
-    is_group = len(human_user_ids) > 1 or has_guest
+    is_group = len(human_user_ids) > 1
     chat_payload: dict = {
         "chatType": "group" if is_group else "oneOnOne",
         "members": members,
