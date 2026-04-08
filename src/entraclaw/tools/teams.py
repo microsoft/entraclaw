@@ -447,7 +447,7 @@ async def send(
     if mentions:
         payload["mentions"] = [
             {
-                "id": m["id"],
+                "id": int(m["id"]),
                 "mentionText": m["name"],
                 "mentioned": {
                     "user": {
@@ -474,6 +474,14 @@ async def send(
             raise RateLimitError(retry_after)
         if resp.status_code == 404:
             raise ChatNotFound(f"Chat {chat_id} not found")
+        if resp.status_code == 400:
+            try:
+                error_body = resp.json()
+                error_msg = error_body.get("error", {}).get("message", resp.text)
+            except Exception:
+                error_msg = resp.text or "Bad Request"
+            logger.error("400 sending message: %s", error_msg)
+            raise ValueError(f"Graph API rejected message: {error_msg}")
         resp.raise_for_status()
 
         msg = resp.json()
