@@ -148,3 +148,40 @@ class TestEntraClawConfig:
             with patch.dict(os.environ, {"ENTRACLAW_SKIP_PROVISIONING": val}, clear=False):
                 cfg = EntraClawConfig.from_env()
             assert cfg.skip_provisioning is False, f"Expected False for '{val}'"
+
+    def test_mode_defaults_to_auto(self) -> None:
+        cfg = EntraClawConfig()
+        assert cfg.mode == "auto"
+
+    def test_mode_from_env(self) -> None:
+        for val in ("bot", "delegated", "agent_user", "auto"):
+            with patch.dict(os.environ, {"ENTRACLAW_MODE": val}, clear=False):
+                cfg = EntraClawConfig.from_env()
+            assert cfg.mode == val, f"Expected '{val}'"
+
+    def test_mode_invalid_defaults_to_auto(self) -> None:
+        with patch.dict(os.environ, {"ENTRACLAW_MODE": "invalid"}, clear=False):
+            cfg = EntraClawConfig.from_env()
+        assert cfg.mode == "auto"
+
+    def test_bot_config_fields(self) -> None:
+        env = {
+            "ENTRACLAW_MODE": "bot",
+            "ENTRACLAW_BOT_APP_ID": "bot-app-123",
+            "ENTRACLAW_BOT_CERT_THUMBPRINT": "bot-cert-thumb",
+            "ENTRACLAW_BOT_TUNNEL_PORT": "4000",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            cfg = EntraClawConfig.from_env()
+        assert cfg.bot_app_id == "bot-app-123"
+        assert cfg.bot_cert_thumbprint == "bot-cert-thumb"
+        assert cfg.bot_tunnel_port == 4000
+
+    def test_bot_tunnel_port_default(self) -> None:
+        cfg = EntraClawConfig()
+        assert cfg.bot_tunnel_port == 3978
+
+    def test_bot_fields_default_none(self) -> None:
+        cfg = EntraClawConfig()
+        assert cfg.bot_app_id is None
+        assert cfg.bot_cert_thumbprint is None

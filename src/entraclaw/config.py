@@ -59,6 +59,14 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 
+VALID_MODES = {"auto", "bot", "delegated", "agent_user"}
+
+
+def _validate_mode(value: str) -> str:
+    """Return the mode if valid, otherwise default to 'auto'."""
+    return value if value in VALID_MODES else "auto"
+
+
 @dataclass(frozen=True)
 class EntraClawConfig:
     """Immutable configuration loaded from environment variables."""
@@ -85,6 +93,10 @@ class EntraClawConfig:
     client_id: str | None = field(default=None)
     skip_provisioning: bool = field(default=False)
     authority: str = field(default="https://login.microsoftonline.com/common")
+    mode: str = field(default="auto")
+    bot_app_id: str | None = field(default=None)
+    bot_cert_thumbprint: str | None = field(default=None)
+    bot_tunnel_port: int = field(default=3978)
 
     @classmethod
     def from_env(cls) -> EntraClawConfig:
@@ -121,6 +133,10 @@ class EntraClawConfig:
             authority=os.environ.get(
                 "ENTRACLAW_AUTHORITY", "https://login.microsoftonline.com/common"
             ),
+            mode=_validate_mode(os.environ.get("ENTRACLAW_MODE", "auto")),
+            bot_app_id=os.environ.get("ENTRACLAW_BOT_APP_ID"),
+            bot_cert_thumbprint=os.environ.get("ENTRACLAW_BOT_CERT_THUMBPRINT"),
+            bot_tunnel_port=int(os.environ.get("ENTRACLAW_BOT_TUNNEL_PORT", "3978")),
         )
 
 

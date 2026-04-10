@@ -441,7 +441,12 @@ async def _init_poll() -> None:
                         logger.info("Loaded persisted watched chat: %s", cid)
 
     # Start background polling
-    if _state.get("watched_chats"):
+    config = _state.get("config")
+    if config and config.mode == "bot":
+        import asyncio
+
+        asyncio.get_event_loop().create_task(_background_poll_bot())
+    elif _state.get("watched_chats"):
         import asyncio
 
         asyncio.get_event_loop().create_task(_background_poll())
@@ -467,6 +472,47 @@ async def _initialize() -> None:
 
 
 BACKGROUND_POLL_INTERVAL = 5  # seconds between polls
+BOT_POLL_INTERVAL = 2  # seconds between bot inbound file checks
+
+
+async def _background_poll_bot() -> None:
+    """Background polling loop for bot mode — reads from inbound.jsonl.
+
+    Instead of polling Graph API, reads the shared JSONL file that the
+    bot server writes inbound Teams messages to.
+    """
+    import asyncio
+
+    from entraclaw.bot.handler import read_inbound
+
+    if logger:
+        logger.info("Starting bot-mode inbound poll (interval=%ds)", BOT_POLL_INTERVAL)
+
+    seen_ids: set[str] = set()
+
+    while True:
+        try:
+            await asyncio.sleep(BOT_POLL_INTERVAL)
+
+            messages = read_inbound()
+            for msg in messages:
+                msg_id = msg.get("message_id", "")
+                if msg_id in seen_ids:
+                    continue
+                seen_ids.add(msg_id)
+
+                await _push_channel_notification(
+                    msg, chat_id=msg.get("conversation_id"),
+                )
+
+            # Bounded cleanup
+            if len(seen_ids) > SEEN_SET_MAX:
+                seen_ids = set(sorted(seen_ids)[-100:])
+
+        except Exception as exc:
+            if logger:
+                logger.warning("Bot inbound poll error: %s", exc)
+            await asyncio.sleep(BOT_POLL_INTERVAL)
 
 
 def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
@@ -692,6 +738,27 @@ async def send_teams_message(
         JSON with message_id and sent_at timestamp.
     """
     await _initialize()
+
+    config = _state.get("config")
+
+    # Bot mode: write to outbound.jsonl for the bot server to pick up
+    if config and config.mode == "bot":
+        from entraclaw.bot.handler import write_outbound
+
+        outbound_msg = {
+            "content": message,
+            "content_type": content_type,
+            "chat_id": chat_id or "",
+        }
+        if mentions:
+            outbound_msg["mentions"] = mentions
+        write_outbound(outbound_msg)
+        return json.dumps({
+            "message_id": f"bot-outbound-{id(outbound_msg)}",
+            "sent_at": datetime.now(UTC).isoformat(),
+            "mode": "bot",
+        }, indent=2)
+
     from entraclaw.tools.teams import send
 
     target_chat = chat_id or _state.get("chat_id")
