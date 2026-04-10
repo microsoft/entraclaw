@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-TOTAL_STEPS=7
+TOTAL_STEPS=8
 
 # ── Argument parsing ───────────────────────────────────────────────────────
 
@@ -452,9 +452,43 @@ chmod 600 .env
 success ".env updated with bot configuration"
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 7: Summary
+# Step 7: Build Teams app package for sideloading
 # ════════════════════════════════════════════════════════════════════════════
-step 7 "Setup complete — summary"
+step 7 "Building Teams app package"
+
+MANIFEST_DIR="$PROJECT_ROOT/manifests/teams-app"
+PACKAGE_PATH="$PROJECT_ROOT/manifests/entraclaw-bot.zip"
+
+if [ ! -f "$MANIFEST_DIR/manifest.json" ]; then
+    warn "No manifest.json found at $MANIFEST_DIR — skipping package build"
+else
+    # Update the bot ID in the manifest to match the actual app ID
+    "$PYTHON" -c "
+import json, pathlib
+mf = pathlib.Path('$MANIFEST_DIR/manifest.json')
+data = json.loads(mf.read_text())
+data['id'] = '$BOT_APP_ID'
+data['bots'][0]['botId'] = '$BOT_APP_ID'
+mf.write_text(json.dumps(data, indent=2) + '\n')
+print('  Updated manifest bot ID to $BOT_APP_ID')
+"
+
+    # Zip the manifest package
+    (cd "$MANIFEST_DIR" && zip -q -j "$PACKAGE_PATH" manifest.json color.png outline.png)
+    success "Teams app package: $PACKAGE_PATH"
+
+    echo ""
+    echo -e "  ${YELLOW}To sideload the bot in Teams:${NC}"
+    echo -e "  1. Open Teams → Apps → Manage your apps → Upload a custom app"
+    echo -e "  2. Select: ${BLUE}$PACKAGE_PATH${NC}"
+    echo -e "  3. Click 'Add' to install in personal scope"
+    echo -e "  4. Guests in your tenant will see the bot after switching to your org"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# Step 8: Summary
+# ════════════════════════════════════════════════════════════════════════════
+step 8 "Setup complete — summary"
 
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"

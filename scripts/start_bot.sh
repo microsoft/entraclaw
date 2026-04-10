@@ -138,10 +138,22 @@ done
 
 if [ -n "${TUNNEL_URL}" ]; then
     ok "Dev Tunnel ready: ${BOLD}${TUNNEL_URL}${NC}"
-    echo ""
-    echo -e "   ${YELLOW}→ Set this as the Messaging Endpoint in Azure Bot Service:${NC}"
-    echo -e "   ${BOLD}${TUNNEL_URL}/api/messages${NC}"
-    echo ""
+
+    # Auto-update Azure Bot messaging endpoint
+    if command -v az &>/dev/null && az account show &>/dev/null 2>&1; then
+        ENDPOINT="${TUNNEL_URL}/api/messages"
+        az bot update \
+            --resource-group "entraclaw-bot-rg" \
+            --name "entraclaw-bot" \
+            --endpoint "${ENDPOINT}" \
+            -o none 2>&1 && ok "Bot endpoint updated: ${ENDPOINT}" \
+            || warn "Could not auto-update bot endpoint. Run: az bot update --resource-group entraclaw-bot-rg --name entraclaw-bot --endpoint ${ENDPOINT}"
+    else
+        echo ""
+        echo -e "   ${YELLOW}→ Set this as the Messaging Endpoint in Azure Bot Service:${NC}"
+        echo -e "   ${BOLD}${TUNNEL_URL}/api/messages${NC}"
+        echo ""
+    fi
 else
     warn "Tunnel URL not detected in time (devtunnel buffers output)."
     warn "It will appear shortly. Check with:"
