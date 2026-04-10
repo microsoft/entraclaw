@@ -98,11 +98,13 @@ SENT_MESSAGE_MAX = 1000
 _sent_message_ids: set[str] = set()
 
 
-def _resolve_tenant_id(email: str, our_domain: str) -> str | None:
+async def _resolve_tenant_id(email: str, our_domain: str) -> str | None:
     """Resolve a tenant ID from an email domain via OpenID discovery.
 
     Returns the tenant GUID if the email domain differs from our_domain
     and OpenID discovery succeeds, otherwise None.
+
+    Uses async httpx to avoid blocking the event loop in the MCP server.
     """
     if "@" not in email:
         return None
@@ -115,20 +117,23 @@ def _resolve_tenant_id(email: str, our_domain: str) -> str | None:
         oidc_url = (
             f"https://login.microsoftonline.com/{domain}/.well-known/openid-configuration"
         )
-        resp = httpx.get(oidc_url, timeout=10)
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(oidc_url, timeout=10)
         if resp.status_code == 200:
             issuer = resp.json().get("issuer", "")
-            # Issuer format: https://login.microsoftonline.com/{tenant_id}/v2.0
-            # Split: ['https:', '', 'login.microsoftonline.com', '{tenant}', 'v2.0']
+            # Issuer format varies:
+            #   https://login.microsoftonline.com/{tenant_id}/v2.0
+            #   https://sts.windows.net/{tenant_id}/
+            # Both parse correctly — split by / and take index 3.
             parts = issuer.rstrip("/").split("/")
             if len(parts) > 3:
                 tenant_id = parts[3]
                 if logger:
                     logger.info("Auto-resolved tenant for %s: %s", domain, tenant_id)
                 return tenant_id
-    except Exception:
+    except Exception as exc:
         if logger:
-            logger.warning("Could not auto-resolve tenant for %s", domain)
+            logger.warning("Could not auto-resolve tenant for %s: %s", domain, exc)
 
     return None
 
@@ -769,7 +774,7 @@ async def add_teams_member(email: str, tenant_id: str = "") -> str:
         our_domain = ""
         if config and config.agent_user_upn and "@" in config.agent_user_upn:
             our_domain = config.agent_user_upn.split("@")[1]
-        resolved = _resolve_tenant_id(email, our_domain)
+        resolved = await _resolve_tenant_id(email, our_domain)
         if resolved:
             tenant_id = resolved
 
@@ -832,7 +837,7 @@ async def create_chat(target_email: str, target_tenant_id: str = "") -> str:
         our_domain = ""
         if config and config.agent_user_upn and "@" in config.agent_user_upn:
             our_domain = config.agent_user_upn.split("@")[1]
-        resolved = _resolve_tenant_id(target_email, our_domain)
+        resolved = await _resolve_tenant_id(target_email, our_domain)
         if resolved:
             target_tenant_id = resolved
 

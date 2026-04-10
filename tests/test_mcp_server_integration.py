@@ -13,7 +13,7 @@ Tests cover:
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -25,52 +25,81 @@ from entraclaw.tools.teams import filter_human_messages
 # _resolve_tenant_id
 # ---------------------------------------------------------------------------
 class TestResolveTenantId:
-    def test_same_domain_returns_none(self) -> None:
+    async def test_same_domain_returns_none(self) -> None:
         from entraclaw.mcp_server import _resolve_tenant_id
 
-        assert _resolve_tenant_id("user@contoso.com", "contoso.com") is None
+        assert await _resolve_tenant_id("user@contoso.com", "contoso.com") is None
 
-    def test_case_insensitive_domain(self) -> None:
+    async def test_case_insensitive_domain(self) -> None:
         from entraclaw.mcp_server import _resolve_tenant_id
 
-        assert _resolve_tenant_id("user@Contoso.COM", "contoso.com") is None
+        assert await _resolve_tenant_id("user@Contoso.COM", "contoso.com") is None
 
-    def test_no_at_sign_returns_none(self) -> None:
+    async def test_no_at_sign_returns_none(self) -> None:
         from entraclaw.mcp_server import _resolve_tenant_id
 
-        assert _resolve_tenant_id("notanemail", "contoso.com") is None
+        assert await _resolve_tenant_id("notanemail", "contoso.com") is None
 
-    def test_cross_tenant_discovery_success(self) -> None:
+    async def test_cross_tenant_discovery_success(self) -> None:
         from entraclaw.mcp_server import _resolve_tenant_id
 
         fake_oidc = {
             "issuer": "https://login.microsoftonline.com/aaaabbbb-cccc-dddd-eeee-ffff00001111/v2.0",
         }
-        with patch("entraclaw.mcp_server.httpx.get") as mock_get:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = fake_oidc
-            mock_get.return_value = mock_resp
+        fake_resp = MagicMock()
+        fake_resp.status_code = 200
+        fake_resp.json.return_value = fake_oidc
 
-            result = _resolve_tenant_id("alice@fabrikam.com", "contoso.com")
+        mock_client = AsyncMock()
+        mock_client.get.return_value = fake_resp
+        mock_client.__aenter__.return_value = mock_client
+
+        with patch("entraclaw.mcp_server.httpx.AsyncClient", return_value=mock_client):
+            result = await _resolve_tenant_id("alice@fabrikam.com", "contoso.com")
             assert result == "aaaabbbb-cccc-dddd-eeee-ffff00001111"
 
-    def test_discovery_failure_returns_none(self) -> None:
+    async def test_cross_tenant_sts_windows_issuer(self) -> None:
+        """microsoft.com returns sts.windows.net issuer, not login.microsoftonline.com."""
         from entraclaw.mcp_server import _resolve_tenant_id
 
-        with patch("entraclaw.mcp_server.httpx.get", side_effect=httpx.ConnectError("timeout")):
-            result = _resolve_tenant_id("alice@fabrikam.com", "contoso.com")
+        fake_oidc = {
+            "issuer": "https://sts.windows.net/72f988bf-86f1-41af-91ab-2d7cd011db47/",
+        }
+        fake_resp = MagicMock()
+        fake_resp.status_code = 200
+        fake_resp.json.return_value = fake_oidc
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = fake_resp
+        mock_client.__aenter__.return_value = mock_client
+
+        with patch("entraclaw.mcp_server.httpx.AsyncClient", return_value=mock_client):
+            result = await _resolve_tenant_id("brandwe@microsoft.com", "werner.ac")
+            assert result == "72f988bf-86f1-41af-91ab-2d7cd011db47"
+
+    async def test_discovery_failure_returns_none(self) -> None:
+        from entraclaw.mcp_server import _resolve_tenant_id
+
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = httpx.ConnectError("timeout")
+        mock_client.__aenter__.return_value = mock_client
+
+        with patch("entraclaw.mcp_server.httpx.AsyncClient", return_value=mock_client):
+            result = await _resolve_tenant_id("alice@fabrikam.com", "contoso.com")
             assert result is None
 
-    def test_discovery_non_200_returns_none(self) -> None:
+    async def test_discovery_non_200_returns_none(self) -> None:
         from entraclaw.mcp_server import _resolve_tenant_id
 
-        with patch("entraclaw.mcp_server.httpx.get") as mock_get:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 404
-            mock_get.return_value = mock_resp
+        fake_resp = MagicMock()
+        fake_resp.status_code = 404
 
-            result = _resolve_tenant_id("alice@fabrikam.com", "contoso.com")
+        mock_client = AsyncMock()
+        mock_client.get.return_value = fake_resp
+        mock_client.__aenter__.return_value = mock_client
+
+        with patch("entraclaw.mcp_server.httpx.AsyncClient", return_value=mock_client):
+            result = await _resolve_tenant_id("alice@fabrikam.com", "contoso.com")
             assert result is None
 
 
