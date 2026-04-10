@@ -210,6 +210,20 @@ pip install microsoft-agents-hosting-core microsoft-agents-activity \
 5. MCP server reads inbound file (polls `inbound.jsonl` every 2 seconds via `asyncio.create_task` in the existing background poll loop)
 6. MCP server pushes to Claude Code via `notifications/claude/channel`
 
+## Eng Review Notes (2026-04-10)
+
+**Outside voice findings (accepted):**
+- JSONL `fcntl.flock` is POSIX-only. Acceptable for Mac/Linux demo. Windows would need `portalocker`.
+- M365 Agents SDK `CertificateCredential` support is unverified in preview. Risk accepted — will pivot to `botbuilder-*` or client secret if cert auth fails.
+- Effort estimate revised from 30 min to 2-4 hours (preview SDK + tunnel integration).
+- `botbuilder-*` fallback is not a drop-in — different class hierarchy. If Agents SDK fails, it's a partial rewrite, not a config change.
+
+**Outside voice findings (rejected):**
+- "Two processes unnecessary" — Approach A is intentionally additive to protect existing MCP server. Approach B (embedded) remains the Phase 2 upgrade path.
+- "Solves already-solved problem" — Agent User requires E5 license + 15-min provisioning. Bot mode delivers the instant experience Eric requested. Different value prop.
+
+**Test coverage:** 19 codepaths mapped, 13 new test scenarios added (see eng review test plan artifact).
+
 ## Open Questions
 
 1. **Dev Tunnel reliability** — Is `devtunnel host -p 3978 --allow-anonymous` stable for multi-hour sessions? Or should we use a reserved persistent tunnel URL?
