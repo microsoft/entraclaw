@@ -352,6 +352,21 @@ async def _init_auth() -> None:
         )
 
 
+def _effective_user_id() -> str | None:
+    """Return the user ID appropriate for the current identity state.
+
+    In AGENT_USER mode, returns config.agent_user_id (the provisioned agent).
+    In DELEGATED mode, returns the signed-in human's OID from the MSAL token.
+    Falls back to config.agent_user_id if identity session has no user_id.
+    """
+    config = _state.get("config")
+    if _identity and _identity.state == IdentityState.DELEGATED:
+        session_uid = _identity.session.user_id
+        if session_uid:
+            return session_uid
+    return config.agent_user_id if config else None
+
+
 async def _init_chat() -> None:
     """Phase 2: Establish the Teams chat (if authenticated)."""
     if _identity is None or _identity.state == IdentityState.UNAUTHENTICATED:
@@ -379,7 +394,7 @@ async def _init_chat() -> None:
                 chat = await create_or_find_chat(
                     token=token,
                     human_user_ids=config.human_user_ids,
-                    agent_user_id=config.agent_user_id,
+                    agent_user_id=_effective_user_id(),
                     human_user_tenant_ids=config.human_user_tenant_ids,
                     human_user_mails=config.human_user_mails,
                     human_user_types=config.human_user_types,
@@ -822,13 +837,11 @@ async def create_chat(target_email: str, target_tenant_id: str = "") -> str:
             target_tenant_id = resolved
 
     await _ensure_valid_token()
-    config = _state.get("config")
-    agent_user_id = config.agent_user_id if config else None
     result = await _with_token_retry(
         create_one_on_one_chat,
         target_email=target_email,
         target_tenant_id=target_tenant_id or None,
-        agent_user_id=agent_user_id,
+        agent_user_id=_effective_user_id(),
     )
 
     # Auto-register the new chat for background polling
