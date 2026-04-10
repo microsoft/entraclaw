@@ -289,6 +289,12 @@ async def _init_auth() -> None:
     config = get_config()
     _state["config"] = config
 
+    # Bot mode: no Graph token needed — bot server handles Teams I/O
+    if config.mode == "bot":
+        if logger:
+            logger.info("Bot mode: skipping Graph auth — bot server handles Teams I/O")
+        return
+
     # Fast path: try three-hop with existing creds (unless SKIP_PROVISIONING)
     if not config.skip_provisioning and config.blueprint_app_id and config.tenant_id:
         try:
@@ -362,13 +368,17 @@ def _effective_user_id() -> str | None:
 
     In AGENT_USER mode, returns config.agent_user_id (the provisioned agent).
     In DELEGATED mode, returns the signed-in human's OID from the MSAL token.
-    Falls back to config.agent_user_id if identity session has no user_id.
+    Returns None in delegated mode if OID is unavailable — callers (e.g.
+    create_one_on_one_chat) will resolve via /me. Never falls through to
+    config.agent_user_id in delegated mode — that's a different identity
+    than the token holder.
     """
     config = _state.get("config")
     if _identity and _identity.state == IdentityState.DELEGATED:
         session_uid = _identity.session.user_id
-        if session_uid:
-            return session_uid
+        # Return the session user_id or None — do NOT fall through to
+        # agent_user_id, which is a different identity than the human token.
+        return session_uid
     return config.agent_user_id if config else None
 
 
