@@ -328,14 +328,25 @@ def _create_adapter(
             import keyring
 
             private_key_pem = keyring.get_password("entraclaw-bot", "private-key")
-            if private_key_pem:
+            cert_pem = keyring.get_password("entraclaw-bot", "certificate")
+            if private_key_pem and cert_pem:
+                import hashlib
+
                 from botframework.connector.auth import (
                     CertificateAppCredentials,
                 )
+                from cryptography import x509
+                from cryptography.hazmat.primitives.serialization import Encoding
+
+                # MSAL expects SHA-1 hex thumbprint, but setup_bot.sh
+                # stores SHA-256 base64url. Compute SHA-1 from the cert.
+                cert_obj = x509.load_pem_x509_certificate(cert_pem.encode())
+                der_bytes = cert_obj.public_bytes(Encoding.DER)
+                sha1_thumbprint = hashlib.sha1(der_bytes).hexdigest().upper()
 
                 credentials = CertificateAppCredentials(
                     app_id=app_id,
-                    certificate_thumbprint=cert_thumbprint,
+                    certificate_thumbprint=sha1_thumbprint,
                     certificate_private_key=private_key_pem,
                     channel_auth_tenant=tenant_id or None,
                 )
@@ -345,16 +356,15 @@ def _create_adapter(
                     app_password="",
                 )
                 adapter = BotFrameworkAdapter(settings)
-                # Replace the default credentials with cert-based ones
                 adapter._credentials = credentials
                 logger.info(
-                    "Using certificate auth (thumbprint: %s...)",
-                    cert_thumbprint[:20],
+                    "Using certificate auth (SHA-1: %s...)",
+                    sha1_thumbprint[:16],
                 )
                 return adapter
             else:
                 logger.warning(
-                    "Cert thumbprint set but private key not in keystore — "
+                    "Cert thumbprint set but key/cert not in keystore — "
                     "falling back to client secret"
                 )
         except ImportError:
