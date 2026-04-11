@@ -512,6 +512,7 @@ async def send(
     content_type: str = "text",
     mentions: list[dict] | None = None,
     prefix: str | None = None,
+    attachments: list[dict] | None = None,
 ) -> dict:
     """Send *message* to the Teams chat identified by *chat_id*.
 
@@ -527,7 +528,7 @@ async def send(
       - ``name``: str — display name shown in the mention
       - ``user_id``: str — Entra user GUID of the mentioned user
     """
-    if not message or not message.strip():
+    if (not message or not message.strip()) and not attachments:
         raise ValueError("Message cannot be empty")
 
     # Apply prefix for delegated mode attribution
@@ -543,6 +544,8 @@ async def send(
     }
 
     payload: dict = {"body": {"contentType": content_type, "content": message}}
+    if attachments:
+        payload["attachments"] = attachments
     if mentions:
         payload["mentions"] = [
             {
@@ -589,6 +592,34 @@ async def send(
             "message_id": msg["id"],
             "sent_at": msg.get("createdDateTime"),
         }
+
+
+async def fetch_hosted_image(*, token: str, url: str) -> bytes | None:
+    """Fetch an image from a Graph API hosted content URL.
+
+    Only accepts URLs under ``graph.microsoft.com`` to prevent
+    leaking the Bearer token to arbitrary hosts.
+
+    Returns the raw image bytes on success, None on 404,
+    raises TokenExpiredError on 401.
+    """
+    if "graph.microsoft.com" not in url:
+        raise ValueError(f"URL is not a Graph API URL: {url}")
+
+    headers = {"Authorization": f"Bearer {token}"}
+
+    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    async with httpx.AsyncClient(transport=transport) as client:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code == 401:
+            raise TokenExpiredError("Token expired — re-acquire")
+        if resp.status_code == 404:
+            return None
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", "60"))
+            raise RateLimitError(retry_after)
+        resp.raise_for_status()
+        return resp.content
 
 
 async def read(

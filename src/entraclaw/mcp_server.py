@@ -795,6 +795,108 @@ async def send_teams_message(
 
 
 @mcp.tool()
+async def send_card(
+    card_type: str,
+    chat_id: str = "",
+    title: str = "",
+    status: str = "complete",
+    detail: str = "",
+    duration: str = "",
+    passed: bool = True,
+    summary: str = "",
+    details_text: str = "",
+    extra: str = "",
+) -> str:
+    """Send a rich Adaptive Card to a Teams chat.
+
+    Use this to send visually structured status updates, tool activity,
+    or build results. Cards render natively in Teams with proper layout.
+
+    Card types:
+    - **tool_activity**: Show a tool running/completing (e.g., reading files,
+      running git). Pass tool_name via ``title``, ``status``, and ``detail``.
+    - **task_status**: Show task progress. Pass task name via ``title``,
+      ``status`` (in_progress/complete/error), ``duration``, and optional
+      ``extra`` as JSON dict of key-value details.
+    - **build_result**: Show pass/fail with details. Pass ``passed``,
+      ``summary``, and optional ``details_text``.
+
+    Args:
+        card_type: One of "tool_activity", "task_status", "build_result".
+        chat_id: Target chat. Empty = default group chat.
+        title: Tool name or task name (for tool_activity and task_status).
+        status: "running", "complete", "error", or "in_progress".
+        detail: Short description (for tool_activity).
+        duration: Human-readable duration (for task_status).
+        passed: True/False (for build_result).
+        summary: One-line summary (for build_result).
+        details_text: Multi-line details (for build_result).
+        extra: JSON string of extra key-value pairs (for task_status details).
+
+    Returns:
+        JSON with message_id and sent_at.
+    """
+    await _initialize()
+    from entraclaw.tools.cards import (
+        build_result_card,
+        card_attachment,
+        task_status_card,
+        tool_activity_card,
+    )
+    from entraclaw.tools.teams import send
+
+    if card_type == "tool_activity":
+        card = tool_activity_card(
+            tool_name=title or "tool",
+            status=status,
+            detail=detail,
+        )
+    elif card_type == "task_status":
+        extra_dict = None
+        if extra:
+            try:
+                extra_dict = json.loads(extra)
+            except json.JSONDecodeError:
+                extra_dict = None
+        card = task_status_card(
+            task=title or "Task",
+            status=status,
+            duration=duration,
+            details=extra_dict,
+        )
+    elif card_type == "build_result":
+        card = build_result_card(
+            passed=passed,
+            summary=summary or "Build result",
+            details=details_text or None,
+        )
+    else:
+        return json.dumps({"error": f"Unknown card_type: {card_type}"})
+
+    attachment = card_attachment(card)
+
+    target_chat = chat_id or _state.get("chat_id")
+    if not target_chat:
+        return json.dumps({"error": "No chat available. Check setup."})
+
+    await _ensure_valid_token()
+
+    prefix = None
+    if _identity and _identity.session.auth_mode == "delegated":
+        prefix = "[EntraClaw]"
+
+    result = await _with_token_retry(
+        send,
+        chat_id=str(target_chat),
+        message="",
+        content_type="html",
+        prefix=prefix,
+        attachments=[attachment],
+    )
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
 async def list_chat_members(chat_id: str = "") -> str:
     """List all members of a Teams chat with their user IDs.
 
@@ -1146,6 +1248,63 @@ def audit_log(
         attribution_type=attribution,
     )
     return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def view_image(url: str) -> str:
+    """Fetch and display an image from a Teams chat message.
+
+    Pass the Graph API hosted content URL from a chat message's
+    ``<img src="...">`` tag. The image is downloaded with the agent's
+    token, saved to a temp file, and the path is returned so Claude
+    Code can render it.
+
+    Only accepts URLs under ``graph.microsoft.com`` — will not send
+    the Bearer token to arbitrary hosts.
+
+    Args:
+        url: The full Graph API hosted content URL
+            (e.g., ``https://graph.microsoft.com/v1.0/chats/.../hostedContents/.../$value``).
+
+    Returns:
+        JSON with the local file path to the downloaded image, or an error.
+    """
+    import tempfile
+
+    await _initialize()
+    from entraclaw.tools.teams import fetch_hosted_image
+
+    if "graph.microsoft.com" not in url:
+        return json.dumps({"error": "Not a Graph API URL — refusing to send token"})
+
+    await _ensure_valid_token()
+    try:
+        image_bytes = await _with_token_retry(
+            fetch_hosted_image,
+            url=url,
+        )
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+    if image_bytes is None:
+        return json.dumps({"error": "Image not found (404)"})
+
+    ext = ".png"
+    if ".jpg" in url or ".jpeg" in url:
+        ext = ".jpg"
+    elif ".gif" in url:
+        ext = ".gif"
+
+    with tempfile.NamedTemporaryFile(
+        suffix=ext, prefix="entraclaw_img_", delete=False
+    ) as tmp:
+        tmp.write(image_bytes)
+        tmp_path = tmp.name
+
+    return json.dumps({
+        "file_path": tmp_path,
+        "size_bytes": len(image_bytes),
+    })
 
 
 @mcp.tool()
