@@ -888,7 +888,7 @@ async def send_card(
     result = await _with_token_retry(
         send,
         chat_id=str(target_chat),
-        message="",
+        message="&nbsp;",
         content_type="html",
         prefix=prefix,
         attachments=[attachment],
