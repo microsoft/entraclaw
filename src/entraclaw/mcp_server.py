@@ -888,9 +888,9 @@ async def send_card(
     result = await _with_token_retry(
         send,
         chat_id=str(target_chat),
-        message="&nbsp;",
+        message='<attachment id="card1"></attachment>',
         content_type="html",
-        prefix=prefix,
+        prefix=None,
         attachments=[attachment],
     )
     return json.dumps(result, indent=2)
