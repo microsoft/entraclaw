@@ -21,3 +21,4 @@ venv/
 .mcp.json
 entraclaw-state-export.tar.gz.enc
 entraclaw_msal_cache
+*.zip

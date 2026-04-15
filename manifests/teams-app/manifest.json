@@ -11,11 +11,11 @@
   },
   "name": {
     "short": "EntraClaw Agent",
-    "full": "EntraClaw Agent — AI Code Agent for Teams"
+    "full": "EntraClaw Agent \u2014 AI Code Agent for Teams"
   },
   "description": {
     "short": "AI agent that sends build results, PR updates, and status cards",
-    "full": "EntraClaw Agent is an AI-powered code agent that communicates through Teams. It sends Adaptive Cards with build results, PR updates, and task status. Messages from the agent show as the bot identity — not the human developer."
+    "full": "EntraClaw Agent is an AI-powered code agent that communicates through Teams. It sends Adaptive Cards with build results, PR updates, and task status. Messages from the agent show as the bot identity \u2014 not the human developer."
   },
   "icons": {
     "color": "color.png",
@@ -25,10 +25,16 @@
   "bots": [
     {
       "botId": "55991923-6f06-4e66-8ca3-cbc9ee991463",
-      "scopes": ["personal", "team", "groupChat"],
+      "scopes": [
+        "personal",
+        "team",
+        "groupChat"
+      ],
       "commandLists": [
         {
-          "scopes": ["personal"],
+          "scopes": [
+            "personal"
+          ],
           "commands": [
             {
               "title": "status",
@@ -39,6 +45,8 @@
       ]
     }
   ],
-  "permissions": ["messageTeamMembers"],
+  "permissions": [
+    "messageTeamMembers"
+  ],
   "validDomains": []
 }
