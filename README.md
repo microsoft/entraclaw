@@ -154,7 +154,7 @@ pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v
 ruff check . && ruff format .
 ```
 
-Current status: **189 tests passing**.
+Current status: **299 tests passing**.
 
 ## Repository Map
 
@@ -171,9 +171,8 @@ Current status: **189 tests passing**.
 | `docs/` | Documentation site (MkDocs Material) |
 | `docs/platform-learnings/` | Deep research on integration platforms + MCP ecosystem |
 | `docs/decisions/` | Architecture Decision Records (3 ADRs) |
-| `docs/runbooks/` | Hard-won learnings (27 entries) |
-| `docs/superpowers/specs/` | Design specs |
-| `docs/superpowers/plans/` | Implementation plans |
+| `docs/runbooks/` | Hard-won learnings (28 entries) |
+
 
 ## Documentation
 

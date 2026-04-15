@@ -2,7 +2,7 @@
 
 **Date:** April 10, 2026
 **Team:** Brandon Werner
-**Status:** Three auth modes working: Agent User (three-hop), Delegated (MSAL), Bot Gateway (M365 Agents SDK). Progressive identity state machine. 189 tests. 6 MCP tools + background channel + bot IPC.
+**Status:** Three auth modes working: Agent User (three-hop), Delegated (MSAL), Bot Gateway (M365 Agents SDK). Progressive identity state machine. 299 tests. 6 MCP tools + background channel + bot IPC.
 
 ---
 
@@ -44,7 +44,7 @@ A proof-of-concept demonstrating that **device-local AI agents can have their ow
 ## TDD Status
 
 ```
-189 passed
+299 passed
 
 Key modules:
   src/entraclaw/auth/          — certificate JWT + MSAL delegated auth
@@ -59,7 +59,7 @@ Key modules:
 
 ## Current Milestone: Bidirectional Teams Loop
 
-**Spec:** `docs/superpowers/specs/2026-04-06-bidirectional-teams-loop-design.md`
+**Spec:** `docs/architecture/PLAN-multi-tenant-lightweight-chat.md`
 **Research:** `docs/platform-learnings/mcp-messaging-servers.md`
 
 ### Scope (scoped down from original)
@@ -108,7 +108,7 @@ Researched 12+ MCP messaging servers (Slack, iMessage, Discord, Teams). Key find
 - Agent User license assignment (auto-detects Teams-capable SKUs)
 - Consent grant (`oAuth2PermissionGrant`) for Teams/Chat permissions
 - Dedicated provisioner app (avoids Azure CLI token rejection)
-- State persisted in `.openclaw-state.json` (idempotent, no secret reset)
+- State persisted in `.entraclaw-state.json` (idempotent, no secret reset)
 - MCP server auto-discovered via `.mcp.json`
 - `--teams-user` flag to set Teams recipient separately from admin
 - Teams read with null-from handling (system messages)
@@ -197,7 +197,7 @@ Blueprint (client_credentials)
 | 13 | stderr swallowed throughout scripts | Hidden errors | Removed all `2>/dev/null` |
 | 14 | Admin and Teams user conflated | Wrong recipient | Added `--teams-user` flag |
 
-See `docs/runbooks/hard-won-learnings.md` for the full append-only log (29 entries).
+See `docs/runbooks/hard-won-learnings.md` for the full append-only log (28 entries).
 
 ---
 
