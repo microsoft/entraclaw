@@ -462,8 +462,9 @@ async def _init_poll() -> None:
 
         asyncio.get_event_loop().create_task(_background_poll())
 
-    # Start email poll when authenticated as the Agent User (its own mailbox).
-    # In delegated mode /me/messages is the human's inbox — not what we want.
+    # Start email poll + daily summary when authenticated as the Agent User
+    # (its own mailbox and outbound mail rights). In delegated mode /me/*
+    # would target the human's mailbox — not what we want.
     if (
         _identity
         and _identity.session
@@ -472,6 +473,7 @@ async def _init_poll() -> None:
         import asyncio
 
         asyncio.get_event_loop().create_task(_background_poll_email())
+        asyncio.get_event_loop().create_task(_background_daily_summary())
 
 
 async def _initialize() -> None:
@@ -801,6 +803,96 @@ def _log_interaction_safe(**kwargs) -> None:
     except Exception as exc:  # pragma: no cover — defensive
         if logger:
             logger.warning("interaction log failed: %s", exc)
+
+
+async def _run_daily_summary_internal(
+    *, day: str | None = None, send: bool = True
+) -> dict:
+    """Read today's log → triage → render → archive → optionally send."""
+    from entraclaw.tools.daily_summary import (
+        archive_summary,
+        render_summary_html,
+        send_summary_email,
+        triage_interactions,
+    )
+    from entraclaw.tools.interaction_log import read_day
+
+    config = _state.get("config") or get_config()
+    target_day = day or datetime.now(UTC).strftime("%Y-%m-%d")
+    entries = read_day(target_day)
+    buckets = triage_interactions(entries)
+    html = render_summary_html(buckets, day=target_day)
+    archive_path = archive_summary(day=target_day, html=html, buckets=buckets)
+
+    sent_to: list[str] = []
+    if send and config.human_user_mails:
+        await _ensure_valid_token()
+        recipients = [config.human_user_mails[0]]  # primary sponsor
+        await _with_token_retry(
+            send_summary_email,
+            html=html,
+            subject=f"Daily summary — {target_day}",
+            to=recipients,
+        )
+        sent_to = recipients
+        # Record the outbound summary in the log itself.
+        _log_interaction_safe(
+            channel="email",
+            direction="outbound",
+            sender="entraclaw-agent",
+            recipient=recipients[0],
+            summary=f"Daily summary — {target_day}",
+            action="daily_summary_sent",
+            content_ref=str(archive_path),
+            metadata={
+                "counts": {k: len(v) for k, v in buckets.items()},
+                "day": target_day,
+            },
+        )
+
+    return {
+        "day": target_day,
+        "counts": {k: len(v) for k, v in buckets.items()},
+        "archive": str(archive_path),
+        "sent_to": sent_to,
+    }
+
+
+async def _background_daily_summary() -> None:
+    """Wake at 5pm PDT each day and send the daily summary."""
+    import asyncio
+
+    from entraclaw.tools.daily_summary import next_run_at
+
+    if logger:
+        logger.info("Starting daily summary scheduler")
+
+    while True:
+        try:
+            nxt = next_run_at(now=datetime.now(UTC))
+            delay = max((nxt - datetime.now(UTC)).total_seconds(), 60.0)
+            if logger:
+                logger.info(
+                    "Next daily summary at %s UTC (%.0fs)",
+                    nxt.isoformat(),
+                    delay,
+                )
+            await asyncio.sleep(delay)
+
+            if _identity and _identity.state in (
+                IdentityState.UNAUTHENTICATED,
+                IdentityState.ERROR,
+            ):
+                continue
+
+            result = await _run_daily_summary_internal(send=True)
+            if logger:
+                logger.info("Daily summary sent: %s", result)
+
+        except Exception as exc:
+            if logger:
+                logger.warning("Daily summary scheduler error: %s", exc)
+            await asyncio.sleep(3600)  # back off for an hour on failure
 
 
 def _summarize_content(content: str, limit: int = 200) -> str:
@@ -1548,6 +1640,38 @@ async def _run_stdio_with_write_stream() -> None:
                 experimental_capabilities={"claude/channel": {}},
             ),
         )
+
+
+@mcp.tool()
+async def run_daily_summary(
+    day: str = "",
+    send: bool = True,
+) -> str:
+    """Triage today's interactions and (optionally) email a summary.
+
+    Reads the interaction log for *day* (UTC, ``YYYY-MM-DD``; defaults to
+    today), sorts entries into three buckets — ``needs_you``, ``handled``,
+    ``heads_up`` — renders an HTML summary, archives it to
+    ``<data_dir>/summaries/<day>.html``, and emails it to the primary
+    sponsor via Graph ``/me/sendMail`` (when *send* is True).
+
+    The scheduler fires this automatically at 5pm PDT each day when
+    running in ``agent_user`` mode. Use this tool to trigger an ad-hoc
+    summary or to preview without sending.
+
+    Args:
+        day: UTC day in ``YYYY-MM-DD`` format. Defaults to today.
+        send: If True, also email the summary. If False, render + archive only.
+
+    Returns:
+        JSON with counts per bucket, archive path, and recipients (if sent).
+    """
+    await _initialize()
+    result = await _run_daily_summary_internal(
+        day=day or None,
+        send=send,
+    )
+    return json.dumps(result, indent=2)
 
 
 def main() -> None:
