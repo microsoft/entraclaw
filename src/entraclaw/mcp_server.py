@@ -27,6 +27,7 @@ from entraclaw.errors import EntraClawError, TokenExchangeError
 from entraclaw.identity.state_machine import IdentityStateMachine
 from entraclaw.logging_config import setup_logging
 from entraclaw.models import IdentityState
+from entraclaw.tools.interaction_log import detect_channel, log_interaction
 from entraclaw.tools.teams import acquire_agent_user_token
 
 logger: logging.Logger | None = None
@@ -663,6 +664,30 @@ async def _background_poll() -> None:
             await asyncio.sleep(BACKGROUND_POLL_INTERVAL)
 
 
+def _log_interaction_safe(**kwargs) -> None:
+    """Best-effort wrapper around log_interaction.
+
+    Never raises — logging failures must not break the primary send/receive
+    path. Logged at warning level if it does fail.
+    """
+    try:
+        log_interaction(**kwargs)
+    except Exception as exc:  # pragma: no cover — defensive
+        if logger:
+            logger.warning("interaction log failed: %s", exc)
+
+
+def _summarize_content(content: str, limit: int = 200) -> str:
+    """Strip HTML and truncate — used when the caller didn't supply a summary."""
+    import re
+
+    text = re.sub(r"<[^>]+>", " ", content or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "\u2026"
+
+
 async def _push_channel_notification(
     message: dict, *, chat_id: str | None = None,
 ) -> None:
@@ -680,13 +705,15 @@ async def _push_channel_notification(
             logger.warning("Cannot push notification — write stream not available")
         return
 
+    resolved_chat_id = chat_id or str(_state.get("chat_id", ""))
+
     notification = JSONRPCNotification(
         jsonrpc="2.0",
         method="notifications/claude/channel",
         params={
             "content": message.get("content", ""),
             "meta": {
-                "chat_id": chat_id or str(_state.get("chat_id", "")),
+                "chat_id": resolved_chat_id,
                 "message_id": message.get("message_id", ""),
                 "user": message.get("from", "unknown"),
                 "ts": message.get("sent_at", ""),
@@ -695,6 +722,21 @@ async def _push_channel_notification(
     )
     session_message = SessionMessage(message=JSONRPCMessage(notification))
     await write_stream.send(session_message)
+
+    # Record the inbound interaction for the daily summary.
+    _log_interaction_safe(
+        channel=detect_channel(resolved_chat_id),
+        direction="inbound",
+        sender=message.get("from", "unknown"),
+        recipient="entraclaw-agent",
+        summary=_summarize_content(message.get("content", "")),
+        action="push_channel_notification",
+        content_ref=message.get("message_id"),
+        metadata={
+            "chat_id": resolved_chat_id,
+            "ts": message.get("sent_at"),
+        },
+    )
 
     if logger:
         logger.info(
@@ -791,6 +833,22 @@ async def send_teams_message(
         mentions=mentions,
         prefix=prefix,
     )
+
+    # Log the outbound message for the daily summary.
+    _log_interaction_safe(
+        channel=detect_channel(str(target_chat)),
+        direction="outbound",
+        sender="entraclaw-agent",
+        recipient=str(target_chat),
+        summary=_summarize_content(message),
+        action="send_teams_message",
+        content_ref=result.get("message_id") if isinstance(result, dict) else None,
+        metadata={
+            "content_type": content_type,
+            "had_mentions": bool(mentions),
+        },
+    )
+
     return json.dumps(result, indent=2)
 
 
@@ -881,9 +939,9 @@ async def send_card(
 
     await _ensure_valid_token()
 
-    prefix = None
-    if _identity and _identity.session.auth_mode == "delegated":
-        prefix = "[EntraClaw]"
+    # Cards deliberately don't carry the [EntraClaw] prefix — the card
+    # body itself already signals agent origin, and prefixing the
+    # `<attachment id="card1"></attachment>` placeholder is wrong.
 
     result = await _with_token_retry(
         send,
@@ -893,6 +951,19 @@ async def send_card(
         prefix=None,
         attachments=[attachment],
     )
+
+    # Log the outbound card for the daily summary.
+    _log_interaction_safe(
+        channel=detect_channel(str(target_chat)),
+        direction="outbound",
+        sender="entraclaw-agent",
+        recipient=str(target_chat),
+        summary=f"card:{card_type} — {(title or summary or detail)[:80]}",
+        action="send_card",
+        content_ref=result.get("message_id") if isinstance(result, dict) else None,
+        metadata={"card_type": card_type, "status": status},
+    )
+
     return json.dumps(result, indent=2)
 
 

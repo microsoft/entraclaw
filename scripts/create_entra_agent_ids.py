@@ -467,6 +467,20 @@ def grant_agent_user_consent(
         "Content-Type": "application/json",
     }
 
+    from datetime import UTC, datetime
+
+    # Scopes the Agent Identity can request when impersonating the Agent User:
+    #   Chat.*, ChatMessage.Send  — Teams chat send/read/manage (the original use case)
+    #   User.Read                 — basic profile lookup
+    #   Files.ReadWrite           — OneDrive file ops (e.g., upload PDFs, share links)
+    #   Mail.Read                 — read Agent User's mailbox (inbound email)
+    #   Mail.Send                 — send email from Agent User (e.g., daily activity summary)
+    scopes = (
+        "Chat.Create Chat.ReadWrite ChatMessage.Send User.Read "
+        "Files.ReadWrite Mail.Read Mail.Send"
+    )
+    required_scopes = set(scopes.split())
+
     # Check if consent already exists (v1.0 API)
     check_url = (
         "https://graph.microsoft.com/v1.0/oauth2PermissionGrants"
@@ -477,12 +491,31 @@ def grant_agent_user_consent(
     if resp.status_code == 200:
         existing = resp.json().get("value", [])
         if existing:
-            print(f"  [skip] Consent already granted (scope: {existing[0].get('scope', '')})")
-            return
+            grant = existing[0]
+            existing_scopes = set((grant.get("scope") or "").split())
+            missing = required_scopes - existing_scopes
+            if not missing:
+                print(f"  [skip] Consent already granted (scope: {grant.get('scope', '')})")
+                return
+            # Existing consent is missing some required scopes — PATCH to add them.
+            merged = sorted(existing_scopes | required_scopes)
+            patch_url = f"https://graph.microsoft.com/v1.0/oauth2PermissionGrants/{grant['id']}"
+            patch_resp = requests.patch(
+                patch_url,
+                headers=headers,
+                json={"scope": " ".join(merged)},
+            )
+            if patch_resp.status_code in (200, 204):
+                print(f"  [updated] Added missing scopes: {sorted(missing)}")
+                print(f"           Full scope set: {' '.join(merged)}")
+                return
+            print(
+                f"  ERROR: Failed to patch consent ({patch_resp.status_code}): "
+                f"{patch_resp.text[:200]}"
+            )
+            print("  Falling through to create new grant...")
 
-    from datetime import UTC, datetime
 
-    scopes = "Chat.Create Chat.ReadWrite ChatMessage.Send User.Read"
     body = {
         "clientId": agent_identity_obj_id,
         "consentType": "Principal",
