@@ -690,6 +690,16 @@ async def _background_poll_email() -> None:
     pushed_email_ids: set[str] = set()
     _PUSHED_EMAIL_MAX = 500
 
+    # Don't push our own outbound emails back as if they were inbound.
+    # /me/messages returns the entire mailbox including the Sent Items
+    # folder; emails the agent sends would otherwise loop into the
+    # channel-notification stream. (Discovered 2026-04-17 when the
+    # "EntraClaw email pipeline test" email I sent to Brandon got
+    # echoed back as an inbound notification ~10s later.)
+    agent_self_upn = (
+        (_state.get("config") or get_config()).agent_user_upn or ""
+    ).lower()
+
     while True:
         try:
             await asyncio.sleep(EMAIL_POLL_INTERVAL)
@@ -713,6 +723,18 @@ async def _background_poll_email() -> None:
             for msg in messages:
                 msg_id = msg.get("id", "")
                 if msg_id and msg_id in pushed_email_ids:
+                    continue
+                # Skip emails the agent itself sent (Sent Items folder
+                # echoes through /me/messages; would create a self-push loop).
+                sender_addr = (
+                    (msg.get("from") or {})
+                    .get("emailAddress", {})
+                    .get("address", "")
+                    .lower()
+                )
+                if agent_self_upn and sender_addr == agent_self_upn:
+                    if msg_id:
+                        pushed_email_ids.add(msg_id)  # mark seen so dedup works
                     continue
                 await _push_email_notification(msg)
                 if msg_id:
