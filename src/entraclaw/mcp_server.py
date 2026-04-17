@@ -680,6 +680,16 @@ async def _background_poll_email() -> None:
         cursor = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         save_cursor(cursor)
 
+    # Per-session dedup. Graph returns sub-second precision on
+    # receivedDateTime but the cursor file we save may end up truncated
+    # to second resolution, which causes the same email to be returned
+    # every poll cycle (observed 2026-04-17 with Jack Test's "Ball
+    # game tonight" looping). Belt-and-suspenders: also track the
+    # Graph-side message IDs we've already pushed this session so we
+    # never double-push, regardless of cursor drift.
+    pushed_email_ids: set[str] = set()
+    _PUSHED_EMAIL_MAX = 500
+
     while True:
         try:
             await asyncio.sleep(EMAIL_POLL_INTERVAL)
@@ -701,7 +711,17 @@ async def _background_poll_email() -> None:
                 save_cursor(cursor)
 
             for msg in messages:
+                msg_id = msg.get("id", "")
+                if msg_id and msg_id in pushed_email_ids:
+                    continue
                 await _push_email_notification(msg)
+                if msg_id:
+                    pushed_email_ids.add(msg_id)
+
+            # Bounded cleanup so the set doesn't grow unbounded over
+            # long-lived sessions.
+            if len(pushed_email_ids) > _PUSHED_EMAIL_MAX:
+                pushed_email_ids = set(list(pushed_email_ids)[-100:])
 
         except Exception as exc:
             if logger:
@@ -800,34 +820,53 @@ async def _push_email_notification(msg: dict) -> None:
     message_id = msg.get("id", "")
     encrypted = msg.get("_encrypted") is True
 
+    # Render sender as "name (addr)" rather than "name <addr>" — the
+    # angle-bracket form reads as an unknown HTML tag to strict parsers on
+    # the receiving side, which was silently closing the MCP stream when
+    # we pushed the notification (observed 2026-04-17: server shut down
+    # clean-EOF immediately after every email push).
     if encrypted:
         content = (
-            f"[email · encrypted] {sender_name} <{sender_addr}> — {subject}\n"
+            f"[email · encrypted] {sender_name} ({sender_addr}) — {subject}\n"
             f"(Purview-encrypted; body inaccessible without IRM decryption)"
         )
     else:
         content = (
-            f"[email] {sender_name} <{sender_addr}> — {subject}\n{preview[:400]}"
+            f"[email] {sender_name} ({sender_addr}) — {subject}\n{preview[:400]}"
         )
 
     write_stream = _state.get("_write_stream")
     if write_stream:
+        # Mirror the Teams-push schema exactly — same top-level keys in meta,
+        # no email-specific extras. Client-side channel notification handlers
+        # appear sensitive to unexpected fields; keep the shape identical
+        # across sources and carry email-specific bits in content instead.
         notification = JSONRPCNotification(
             jsonrpc="2.0",
             method="notifications/claude/channel",
             params={
                 "content": content,
                 "meta": {
-                    "channel": "email",
+                    "chat_id": "email",  # synthetic — marks this as email-channel
                     "message_id": message_id,
                     "user": sender_addr,
                     "ts": received,
-                    "subject": subject,
-                    "encrypted": encrypted,
                 },
             },
         )
-        await write_stream.send(SessionMessage(message=JSONRPCMessage(notification)))
+        session_message = SessionMessage(message=JSONRPCMessage(notification))
+        try:
+            await write_stream.send(session_message)
+        except Exception as exc:
+            # Don't let a transport failure take down the poll loop.
+            # Matches the swallow-and-log pattern from _push_channel_notification.
+            if logger:
+                logger.warning(
+                    "Email push failed for %s: %s: %s",
+                    message_id or "?",
+                    type(exc).__name__,
+                    exc,
+                )
     elif logger:
         logger.warning("Cannot push email notification — write stream not available")
 
