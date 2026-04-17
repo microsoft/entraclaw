@@ -1656,15 +1656,38 @@ async def _run_stdio_with_write_stream() -> None:
     a notification handler for ``notifications/claude/channel`` from this server.
     Without this capability, channel notifications are silently dropped.
     """
+    import asyncio
+
     async with stdio_server() as (read_stream, write_stream):
         _state["_write_stream"] = write_stream
-        await mcp._mcp_server.run(
-            read_stream,
-            write_stream,
-            mcp._mcp_server.create_initialization_options(
-                experimental_capabilities={"claude/channel": {}},
-            ),
-        )
+
+        # Eagerly kick off auth + watched-chat load + background polls so the
+        # agent starts observing DMs/email the moment the server boots —
+        # without waiting for the first MCP tool call. Lazy init left every
+        # fresh server process deaf to inbound Teams traffic until a user
+        # happened to invoke a tool.
+        async def _eager_init() -> None:
+            try:
+                await _initialize()
+            except Exception as exc:
+                if logger:
+                    logger.warning(
+                        "Eager init failed: %s: %s",
+                        type(exc).__name__,
+                        exc,
+                    )
+
+        init_task = asyncio.create_task(_eager_init())
+        try:
+            await mcp._mcp_server.run(
+                read_stream,
+                write_stream,
+                mcp._mcp_server.create_initialization_options(
+                    experimental_capabilities={"claude/channel": {}},
+                ),
+            )
+        finally:
+            init_task.cancel()
 
 
 @mcp.tool()
