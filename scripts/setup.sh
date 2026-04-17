@@ -338,19 +338,55 @@ CERT_THUMBPRINT=$(read_state "BLUEPRINT_CERT_THUMBPRINT")
 if [ -n "$CERT_THUMBPRINT" ]; then
     success "Using cached certificate (thumbprint: ${CERT_THUMBPRINT:0:16}...)"
 else
+    # Before generating — check if the Blueprint already has certs registered
+    # (e.g. from a teammate's machine or from a prior install on another
+    # laptop). setup.sh uploads the new cert via PATCH keyCredentials,
+    # which is a list REPLACE, not an append — so any existing certs on
+    # the Blueprint will be wiped. Warn loudly and confirm before proceeding;
+    # otherwise we'd silently lock out whatever machines those certs came
+    # from.
+    # stdout: the numeric count (shell reads it into EXISTING_COUNT)
+    # stderr: one human-readable line per cert (visible on the terminal, so
+    #         the user sees WHICH certs will be replaced before confirming)
+    EXISTING_COUNT=$(PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" \
+        "$PROJECT_ROOT/scripts/list_blueprint_certs.py" "$BLUEPRINT_OBJECT_ID")
+
+    if [ "$EXISTING_COUNT" -gt 0 ] 2>/dev/null; then
+        echo ""
+        echo -e "  ${YELLOW}WARNING${NC}: Blueprint app already has ${YELLOW}$EXISTING_COUNT${NC} registered cert(s) (shown above)."
+        echo -e "  Generating a new cert here will ${YELLOW}REPLACE${NC} that list (Graph PATCH semantics)."
+        echo -e "  Any machine currently authenticating with one of those certs will stop"
+        echo -e "  working until it re-runs setup.sh. EntraClaw is designed to run from one"
+        echo -e "  machine at a time, so this is usually what you want — but confirm."
+        echo ""
+        if [ -t 0 ]; then
+            read -r -p "  Replace existing cert(s) and bind the Blueprint to this machine? [y/N] " CONFIRM
+            if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+                fail "Cert replacement aborted by user"
+            fi
+        else
+            echo -e "  ${BLUE}[non-interactive shell — proceeding]${NC}"
+        fi
+        echo ""
+    fi
+
     echo "  Generating self-signed certificate for Blueprint..."
 
     # Generate cert, store private key in keyring, upload public cert via
     # Provisioner token (NOT az CLI — Learning #1: az CLI tokens include
     # Directory.AccessAsUser.All which Agent Identity APIs reject).
     CERT_THUMBPRINT=$("$VENV_PY" -c "
-import contextlib, sys, json, hashlib, base64
+import contextlib, socket, sys, json, hashlib, base64
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from datetime import datetime, timedelta, timezone
 import keyring, requests, pathlib
+
+# Hostname tag so Entra-side cert listing identifies which machine owns
+# each registered key (useful when rotating or revoking one device).
+_HOST = socket.gethostname().split('.')[0] or 'unknown'
 
 # --- Generate RSA 2048 key + self-signed cert ---
 key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -406,7 +442,7 @@ resp = requests.patch(
         'type': 'AsymmetricX509Cert',
         'usage': 'Verify',
         'key': cert_b64,
-        'displayName': 'EntraClaw Device Certificate',
+        'displayName': f'EntraClaw Device Certificate — {_HOST}',
         'startDateTime': start_date,
         'endDateTime': end_date,
     }]},
