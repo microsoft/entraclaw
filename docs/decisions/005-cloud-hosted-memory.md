@@ -1,7 +1,7 @@
 # ADR-005: Cloud-Hosted Memory via Azure Blob Storage
 
 **Date:** 2026-04-17
-**Status:** Proposed
+**Status:** Accepted (open questions resolved 2026-04-17; implementation in progress, Phase 1)
 **Deciders:** Brandon Werner, EntraClaw Agent
 **Context:** Agent memory portability across machines + foundation for a later cloud-hosted poller
 
@@ -110,9 +110,47 @@ The agent reads the manifest at session start to know what's available without l
 - High-frequency writes (interactions) batch in-memory for up to 5s or 4KB, then flush
 - On machine start: sync manifest, lazy-pull changed files on first access
 
+### Retention + compaction (hippocampus → cortex)
+
+Retention is governed by *what still has value in raw form*, not by calendar alone. Raw interaction logs stop being useful as verbatim context after about a week — after that, the **pattern** is what matters, not the trace. Daily summaries and weekly digests persist longer because they compress the value. Behavioral memory (hand-curated rules, facts about people and projects) persists indefinitely because it's already at the distilled layer.
+
+**Retention policy:**
+
+| Layer | Retention | Rationale |
+|---|---|---|
+| `behavioral/` | Indefinite (manual prune only) | Distilled rules + facts; no auto-decay |
+| `summaries/` (daily) | 30 days | Already compressed; queryable |
+| `compacted/YYYY-WW.md` (weekly digests) | 30 days | Second-order compression; captures texture |
+| `interactions/YYYY-MM-DD.jsonl` (raw) | **7 days** | After a week, raw form is rarely load-bearing |
+
+**Daily compaction step** (runs once per day, before day `N-7` is purged):
+
+1. Read day `N-7`'s raw `interactions/YYYY-MM-DD.jsonl`.
+2. Extract **three kinds of durable content**, promoting each to the appropriate layer:
+   - **Behavioral learnings** ("Brandon prefers Teams over email when initiating") → `behavioral/feedback_*.md` or `project_*.md`. Curated; agent writes a draft, confirms with sponsor before promoting.
+   - **Patterns, recurring decisions, facts about people/projects** → `compacted/YYYY-WW.md` (this week's digest, append-mode).
+   - **Routine status pings, noise, banter** → discarded.
+3. Delete the raw `interactions/YYYY-MM-DD.jsonl` once compaction succeeds.
+
+This is hippocampus → neocortex: the raw episodic trace decays, the consolidated semantic pattern persists. Also mirrors Claude Code's `/compact` — same information-theoretic move at a different layer.
+
+### Token-budget governor
+
+Retention was cross-checked against the agent's context budget. With a 1M-token context window and realistic reserves (current conversation, tool schemas, system prompt), the available budget for hot-loaded memory is ~400K tokens. Worst-case sum of all layers above:
+
+| Layer | Size estimate | Tokens |
+|---|---|---|
+| All behavioral memory | ~100 KB | ~25 K |
+| 7 days raw interactions | ~350 KB | ~85 K |
+| 30 days weekly digests | ~200 KB | ~50 K |
+| 30 days daily summaries | ~100 KB | ~25 K |
+| **Total** | **~750 KB** | **~185 K** |
+
+Comfortable fit. Retention isn't bounded by context; it's bounded by the usefulness of raw traces, which is why 7 days is the right window for `interactions/` even though the budget could hold more.
+
 ### Concurrency
 
-Low-risk in practice — the agent runs on one machine at a time, one process. Guard anyway with **ETag-based optimistic concurrency** on blob writes. If the ETag changed since our last read, the write fails; we refetch and retry. This handles the rare case of two machines writing simultaneously (e.g. Brandon forgot to stop the Mac Studio server before switching to the laptop).
+Low-risk in practice — the agent runs on one machine at a time, one process. Guard anyway with **ETag-based optimistic concurrency** on blob writes. If the ETag changed since our last read, the write fails with HTTP 412; we refetch and retry. This handles the rare case of two of the same user's machines writing simultaneously (e.g. Brandon forgot to stop the Mac Studio server before switching to the laptop). Last-writer-wins semantics after retry, which is correct for single-user-multi-machine.
 
 ### Migration
 
@@ -164,12 +202,19 @@ Implementation:
 
 Default: cloud mode when `az login` exists + Azure subscription is reachable. Local mode when provisioning fails OR the flag is set explicitly.
 
-## Open questions for discussion
+## Resolved decisions (from sponsor discussion 2026-04-17)
 
-1. **Container per Agent User vs shared:** per-user is safer (blast radius, RBAC). Shared is simpler. Recommendation: per-user.
-2. **Soft-delete retention on the container:** 7 days default, 30 for behavioral? Or uniform 14?
-3. **Cost surfacing:** include monthly storage cost in the daily summary footer, or leave implicit since it's ~$0.02/mo at current usage?
-4. **Multi-writer semantics beyond ETag retry:** add a lock file for extra safety, or trust ETag + last-writer-wins?
+1. **Container per Agent User** — confirmed. Container names include the Agent User object ID so multiple CLIs under the same human sponsor don't collide.
+2. **Differentiated retention via compaction** — confirmed. See "Retention + compaction" above: behavioral indefinite, summaries + digests 30d, raw interactions 7d with a daily compaction step that promotes durable content to longer-retention layers before deletion.
+3. **No cost surfacing in the daily summary** — confirmed. Monthly projection printed once at `setup.sh` completion so new users see what they're signing up for; otherwise silent.
+4. **ETag-only concurrency for now** — confirmed. Adds a TODO below for the cases we're not solving yet.
+
+## TODO (future work, explicitly out of scope for this ADR)
+
+- **Document user-visible recovery behavior** when two of the user's own machines run simultaneously. ETag handles it correctly (last-writer-wins after retry), but the semantics should be documented so users aren't surprised when their laptop clobbers an unflushed Mac Studio write.
+- **Multi-agent coordination on shared memory.** Explicitly *not* supported by this design. If we ever want two distinct Agent Users to share a memory store (e.g. Brandon's EntraClaw and Alex's agent both writing to a team-wide behavioral layer), that's a future ADR. Would require real locking or CRDT-style merge semantics. Categorized as science-project for now.
+- **Compaction quality control.** The daily compaction step is the most judgment-heavy part of this design. The first few weeks should log compaction decisions so we can eyeball what got promoted vs discarded and tune the heuristic. Treat the first 30 days of compaction output as reviewable.
+- **Manifest consistency under concurrent writes.** The manifest is a single file updated on every blob write; ETag protects it, but heavy write bursts could cause retry loops. Monitor; switch to per-prefix manifests if that becomes a real problem.
 
 ## Consequences
 
