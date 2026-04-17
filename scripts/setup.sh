@@ -502,15 +502,19 @@ fi
 
 # Write MCP server config to project root (.mcp.json)
 # Claude Code picks this up automatically when opening the project.
-VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python3"
+# Uses the `entraclaw-mcp` console script installed by `pip install -e .[dev]`
+# (defined as a [project.scripts] entry in pyproject.toml) — cleaner than
+# invoking `python3 -m entraclaw.mcp_server` because it doesn't depend on
+# the CLI having the right cwd.
+ENTRACLAW_MCP_BIN="$PROJECT_ROOT/.venv/bin/entraclaw-mcp"
 cat > "$PROJECT_ROOT/.mcp.json" << MCPEOF
 {
   "mcpServers": {
     "entraclaw": {
-      "command": "$VENV_PYTHON",
-      "args": ["-m", "entraclaw.mcp_server"],
-      "cwd": "$PROJECT_ROOT",
-      "env": {}
+      "type": "stdio",
+      "command": "$ENTRACLAW_MCP_BIN",
+      "args": [],
+      "description": "EntraClaw Agent Identity — Teams tools + background DM/email poll"
     }
   }
 }
