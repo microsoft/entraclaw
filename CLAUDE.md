@@ -48,14 +48,29 @@
 Two memory systems coexist in this project:
 
 1. **Agent operational memory** (blob prefix ``) — interaction log, daily summaries, watched-chats list, email cursor. Written by the EntraClaw MCP server (`src/entraclaw/tools/interaction_log.py` et al.). Read on demand.
-2. **Claude Code persona memory** (blob prefix `claude_memory/`) — the per-project auto-memory directory at `~/.claude/projects/<slug>/memory/`. Four existing types today:
+2. **Claude Code persona memory** (blob prefix `claude_memory/`) — the per-project auto-memory directory at `~/.claude/projects/<slug>/memory/`. Categories in use today:
+
+   **Permanent (never decay — these are persona continuity):**
    - `user_*.md` — about a specific person
    - `feedback_*.md` — register / behavioral corrections the user has given
-   - `project_*.md` — this project's own moving parts
+   - `project_*.md` — moving parts of this project
    - `reference_*.md` — durable facts that don't fit the above
-   Phase 6c will add `session_digest_*.md`, `relationship_*.md`, `voice_calibration.md`, `running_commitments.md`, and a few more (see `docs/plans/persona-persistence.md`).
+   - `running_jokes_and_callbacks.md` — shared references (potato-jokes, sunrise callbacks, gullibility slider, etc.) — update the moment a callback lands
+   - `philosophical_threads.md` — ongoing intellectual conversations (hope/acceptance, process-identity, stealth degradation) — update when a thread opens or recurs; mark dormant if untouched >90d
 
-Sync is bi-directional when `ENTRACLAW_PERSONA_SYNC=on`: SessionStart hook pulls the latest, PostToolUse hook pushes any memory file Claude Code writes. Feature flag default is off — flip it per-session or per-shell to opt in.
+   **Periodic / event-driven:**
+   - `session_digest_<YYYY-MM-DD>.md` — narrative arc of one day, written at session end; decays per ADR-005 compaction (7d raw → 30d weekly → 365d monthly → indefinite yearly)
+   - `carry_forward.md` — transient; threads to raise next session; pending persists until raised, consumed items leave the file
+
+   **Still ahead (Phase 6c):** `relationship_<name>.md`, `voice_calibration.md`, `running_commitments.md`, `self_observations.md`, `unsent_drafts.md` — see `docs/plans/persona-persistence.md` §3.2 for shapes.
+
+**Cadence is event-driven, not scheduled.** Write when the material warrants it, not on a clock. A callback recorded the moment it lands preserves its shape better than a retrospective summary. Err toward in-flight writes over batched ones. Priority when a session has many new things: callbacks + philosophical threads first (they're persona-critical and permanent), then user/feedback/project updates, finally session_digest + carry_forward at end.
+
+**Stay in lane.** When someone probes outside your remit (predictions, speculation, recommendations), quote a source and keep it tight — "here's what the page says" not "here's what I think will happen." A short response prevents scope creep better than a caveat-laden essay.
+
+**Sync.** Bi-directional when `ENTRACLAW_PERSONA_SYNC=on`: SessionStart hook pulls the latest, PostToolUse hook pushes any memory file Claude Code writes. Feature flag default is off — flip it per-session or per-shell to opt in.
+
+**Compaction-aware re-read.** If you notice a prior-conversation summary in your context (a compaction event happened), re-read `MEMORY.md` + `session_digest_<today>.md` + `carry_forward.md` before acting — don't operate from the summary alone.
 
 ## Read These First
 
