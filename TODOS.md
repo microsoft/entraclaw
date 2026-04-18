@@ -8,6 +8,19 @@ Land the next phase of cloud-hosted memory. Spec: `docs/decisions/005-cloud-host
 - **Depends on:** Phase 1 (`f900ba1`, shipped)
 - **Source:** ADR-005
 
+### Test isolation: interaction_log tests leak into production blob when ENTRACLAW_BLOB_ENDPOINT is set
+The `tmp_data_dir` fixture in `tests/tools/test_interaction_log.py` sets `ENTRACLAW_DATA_DIR` to a pytest tmp path but does NOT clear `ENTRACLAW_BLOB_ENDPOINT` / `ENTRACLAW_BLOB_CONTAINER`. Since Phase 2/5 routed `log_interaction` and `read_day` through `get_backend()`, the factory reads those env vars and returns `BlobBackend` — which hits the real production container and ignores the tmp_data_dir. Result: 10 tests in `test_interaction_log.py` fail on any machine with the blob env configured (passed on the Phase 6a author's machine because they hadn't exported those vars). Observed 2026-04-17 during Phase 6a review: test run produced 443 passed / 10 failed; failing tests were reading 75 real chat entries from blob when they expected 2 from the tmp dir.
+Fix: make the `tmp_data_dir` fixture (and any sibling fixture that patches config) also `monkeypatch.delenv("ENTRACLAW_BLOB_ENDPOINT", raising=False)` + same for `ENTRACLAW_BLOB_CONTAINER`. Consider a session-scoped autouse fixture that unsets blob env for *all* tests unless a test opts in. Also audit other test files that might have the same latent bug (`test_daily_summary.py`, `test_email_poll.py`, anywhere using `get_backend()`).
+- **Effort:** S (~30 LOC — fixture edit + audit)
+- **Source:** Phase 6a review 2026-04-17; failure is pre-existing on main, not introduced by Phase 6a
+
+### PersonaBackend.pull_all() missing mtime-newer-local check (Phase 6d scope)
+`src/entraclaw/storage/persona.py` `pull_all()` currently overwrites local files unconditionally — cloud is authoritative on pull. The persona-persistence plan §4.2 specified: "If local is newer (happens if session was offline), leave it (to be pushed next)." Phase 6a shipped without that check for the safe-starting-point framing, but it's a race-loss risk: if a session writes a memory file offline, the next online session's SessionStart pull will clobber it before the PostToolUse-Write push fires. The mitigation of this was planned for Phase 6d (ETag-based conflict resolution) but the simple mtime check should land sooner.
+Fix: compare local file mtime vs blob's last-modified on pull, skip overwrite if local is newer, add to `PersonaReport` a new `skipped_local_newer` counter. Test: pytest fixture with a local file newer than the (fake) blob's content → pull_all must leave it.
+- **Effort:** XS (~20 LOC + 2 tests)
+- **Depends on:** Phase 6a (`1514dcd`, shipped)
+- **Source:** Phase 6a review 2026-04-17; plan §4.2 said we'd do this, Phase 6a deferred
+
 ### MCP server orphans when Claude Code exits
 Observed twice: when the parent Claude process exits, the `entraclaw-mcp` child keeps running. The new Claude session spawns a *second* MCP server, and both servers poll Graph independently — causing dual interaction-log writes (observed 2026-04-17: local log 54 lines vs blob log 19 lines on the same UTC day) and dual channel-push attempts. Root cause: `_background_poll_teams`, `_background_poll_email`, `_background_discover_chats`, and `_background_daily_summary` are spawned as top-level asyncio tasks inside `_initialize()`. They sit outside FastMCP's lifespan cancel scope, so when stdin closes and FastMCP's stdio read loop exits, the polling tasks keep the event loop alive and the process never terminates. Fixes in priority order: (a) spawn background tasks inside FastMCP's lifespan context manager so shutdown cancels them, (b) explicitly watch stdin for EOF in `_initialize` and cancel the task group, or (c) have polling tasks poll a shared shutdown event that FastMCP's stop hook sets. Workaround until fixed: manually `kill <pid>` old `entraclaw-mcp` processes.
 - **Effort:** S (~40 LOC + test that proves stdin-EOF cancels polls)
