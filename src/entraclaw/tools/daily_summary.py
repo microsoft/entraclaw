@@ -25,13 +25,12 @@ import json
 import logging
 from datetime import UTC, datetime, timedelta
 from html import escape
-from pathlib import Path
 from typing import TypedDict
 
 import httpx
 
-from entraclaw.config import get_config
 from entraclaw.errors import TokenExpiredError
+from entraclaw.storage.backend import get_backend
 
 logger = logging.getLogger("entraclaw.tools.daily_summary")
 
@@ -189,27 +188,23 @@ async def send_summary_email(
 # ---------------------------------------------------------------------------
 # Archive
 # ---------------------------------------------------------------------------
-def _summaries_dir() -> Path:
-    cfg = get_config()
-    d = cfg.data_dir / "summaries"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
 def archive_summary(
     *, day: str, html: str, buckets: SummaryBuckets
-) -> Path:
-    """Persist the rendered summary + sidecar counts to the data dir."""
-    d = _summaries_dir()
-    html_path = d / f"{day}.html"
-    html_path.write_text(html)
+) -> str:
+    """Persist the rendered summary + sidecar counts via the memory backend.
+
+    Returns the backend key for the HTML body (e.g. ``"summaries/2026-04-17.html"``).
+    """
+    backend = get_backend()
+    html_key = f"summaries/{day}.html"
+    backend.write_text(html_key, html)
 
     sidecar = {
         "day": day,
         "counts": {k: len(v) for k, v in buckets.items()},
     }
-    (d / f"{day}.json").write_text(json.dumps(sidecar, indent=2))
-    return html_path
+    backend.write_text(f"summaries/{day}.json", json.dumps(sidecar, indent=2))
+    return html_key
 
 
 # ---------------------------------------------------------------------------

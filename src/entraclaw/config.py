@@ -97,6 +97,9 @@ class EntraClawConfig:
     bot_app_id: str | None = field(default=None)
     bot_cert_thumbprint: str | None = field(default=None)
     bot_tunnel_port: int = field(default=3978)
+    blob_endpoint: str | None = field(default=None)
+    blob_container: str | None = field(default=None)
+    keep_memory_local: bool = field(default=False)
 
     @classmethod
     def from_env(cls) -> EntraClawConfig:
@@ -137,6 +140,10 @@ class EntraClawConfig:
             bot_app_id=os.environ.get("ENTRACLAW_BOT_APP_ID"),
             bot_cert_thumbprint=os.environ.get("ENTRACLAW_BOT_CERT_THUMBPRINT"),
             bot_tunnel_port=int(os.environ.get("ENTRACLAW_BOT_TUNNEL_PORT", "3978")),
+            blob_endpoint=os.environ.get("ENTRACLAW_BLOB_ENDPOINT"),
+            blob_container=os.environ.get("ENTRACLAW_BLOB_CONTAINER"),
+            keep_memory_local=os.environ.get("ENTRACLAW_KEEP_MEMORY_LOCAL", "").lower()
+            in ("true", "1", "yes"),
         )
 
 

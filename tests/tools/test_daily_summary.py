@@ -273,9 +273,10 @@ class TestSendSummary:
 class TestArchive:
     def test_writes_html_to_summaries_dir(self, tmp_data_dir: Path) -> None:
         buckets = {"needs_you": [], "handled": [], "heads_up": []}
-        path = archive_summary(day="2026-04-16", html="<p>hi</p>", buckets=buckets)
-        assert path == tmp_data_dir / "summaries" / "2026-04-16.html"
-        assert path.read_text() == "<p>hi</p>"
+        key = archive_summary(day="2026-04-16", html="<p>hi</p>", buckets=buckets)
+        assert key == "summaries/2026-04-16.html"
+        # LocalBackend (the default) writes into <data_dir>/<key>
+        assert (tmp_data_dir / key).read_text() == "<p>hi</p>"
 
     def test_writes_sidecar_json_with_bucket_counts(self, tmp_data_dir: Path) -> None:
         """A sidecar .json captures counts for quick programmatic access."""

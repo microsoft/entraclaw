@@ -185,3 +185,35 @@ class TestEntraClawConfig:
         cfg = EntraClawConfig()
         assert cfg.bot_app_id is None
         assert cfg.bot_cert_thumbprint is None
+
+
+class TestBlobStorageConfig:
+    """ADR-005 Phase 5 — blob endpoint, container, and keep-memory-local."""
+
+    def test_blob_fields_default_none_and_false(self) -> None:
+        cfg = EntraClawConfig()
+        assert cfg.blob_endpoint is None
+        assert cfg.blob_container is None
+        assert cfg.keep_memory_local is False
+
+    def test_blob_fields_from_env(self) -> None:
+        env = {
+            "ENTRACLAW_BLOB_ENDPOINT": "https://entclaw.blob.core.windows.net",
+            "ENTRACLAW_BLOB_CONTAINER": "agent-abc-123",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            cfg = EntraClawConfig.from_env()
+        assert cfg.blob_endpoint == "https://entclaw.blob.core.windows.net"
+        assert cfg.blob_container == "agent-abc-123"
+
+    def test_keep_memory_local_truthy_values(self) -> None:
+        for val in ("true", "True", "1", "yes"):
+            with patch.dict(os.environ, {"ENTRACLAW_KEEP_MEMORY_LOCAL": val}, clear=False):
+                cfg = EntraClawConfig.from_env()
+            assert cfg.keep_memory_local is True, f"Expected True for '{val}'"
+
+    def test_keep_memory_local_falsy_values(self) -> None:
+        for val in ("false", "0", "no", ""):
+            with patch.dict(os.environ, {"ENTRACLAW_KEEP_MEMORY_LOCAL": val}, clear=False):
+                cfg = EntraClawConfig.from_env()
+            assert cfg.keep_memory_local is False, f"Expected False for '{val}'"

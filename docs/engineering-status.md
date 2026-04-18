@@ -2,7 +2,7 @@
 
 **Date:** April 17, 2026
 **Team:** Brandon Werner
-**Status:** Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **385 tests.** 11 MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat landed. Phase 1-3 daily-summary stack live (interaction log → email poll → triage email). ADR-005 cloud-memory: Phase 1 (`BlobStore` client) shipped, Phase 2 next.
+**Status:** Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **442 tests.** 11 MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat landed. Phase 1-3 daily-summary stack live (interaction log → email poll → triage email). **ADR-005 cloud-memory: Phases 1, 2, 5 shipped** — Phase 3 (CachedBlobBackend) next.
 
 ---
 
@@ -17,7 +17,9 @@
 - **Email-push schema fix (`9a71d6c`)** — email push notification meta + content aligned with Teams push (no `<sender@addr>` angle brackets that read as HTML tags; meta carries only `chat_id="email"`/`message_id`/`user`/`ts`). Fixed: silent MCP-stream close after every email push.
 - **`prompts/agent_system.md` (`75917a3`)** — system prompt moved out of `mcp_server.py` Python string into editable markdown, loaded at import time. Encodes: channel discipline (reply on the same channel, default-to-Teams when initiating, group chat ≠ N DMs, HTML for structured content), watch-only-in-group-chats with literal "about me ≠ tagged me" caveat + 3 narrow exceptions, internal-framing-stays-internal, no back-to-back pings, IDNA-only chat membership.
 - **`setup.sh` hardening** — tenant-wide UPN lookup before Agent User creation (`8541d75`), warn-and-confirm before replacing Blueprint certs (`2338a7a`), cached-cert verification against Entra (`22e81d9`), `redirect_stdout(sys.stderr)` to stop diagnostic spam from corrupting `.env` cert thumbprint (`c99d66a`), `entraclaw-mcp` console script in `.mcp.json` (`5bb3bc4`).
-- **ADR-005 Phase 1 (`f900ba1`)** — `BlobStore` async client in `src/entraclaw/storage/blob.py`. 22 tests. Not yet wired into runtime — Phase 2 (`MemoryBackend` protocol + routing) is the next ship.
+- **ADR-005 Phase 1 (`f900ba1`)** — `BlobStore` async client in `src/entraclaw/storage/blob.py`. 22 tests.
+- **ADR-005 Phase 2** — `MemoryBackend` protocol + `LocalBackend` / `BlobBackend` impls + `get_backend()` factory in `src/entraclaw/storage/backend.py`. `interaction_log.py` and `daily_summary.py` route through it. 22 tests.
+- **ADR-005 Phase 5** — `acquire_agent_user_storage_token` (storage-scope third hop), `--keep-memory-local` flag in `setup.sh`, `scripts/provision_blob_storage.py` (idempotent Storage Account + container + RBAC), migration helper in `src/entraclaw/storage/migration.py`, blob endpoint/container/keep-memory-local config fields. 23 tests.
 - **Multi-tenant lightweight chat** — landed to `main` (commit `c8ec521`, 47 commits, +9331/-2484).
 
 ---

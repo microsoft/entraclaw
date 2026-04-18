@@ -18,8 +18,8 @@
 ## Current Runtime Model
 
 - Python 3.12+ research project — no deployed service yet
-- Eight modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `storage/` (cloud-memory backend, ADR-005 Phase 1) → `mcp_server.py` (FastMCP + background channel)
-- External dependencies: Microsoft Entra ID (identity), Microsoft Teams + Outlook mailbox (communication via Graph API or Bot Framework), Azure Blob Storage (planned for memory, ADR-005)
+- Eight modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `storage/` (cloud-memory backend: `BlobStore` + `MemoryBackend` protocol + `migration` helper — ADR-005 Phases 1, 2, 5 shipped) → `mcp_server.py` (FastMCP + background channel)
+- External dependencies: Microsoft Entra ID (identity), Microsoft Teams + Outlook mailbox (communication via Graph API or Bot Framework), Azure Blob Storage (agent memory, provisioned by setup.sh)
 - Three auth modes via `ENTRACLAW_MODE` config switch:
   - `agent_user` — three-hop Agent User flow (Blueprint cert → Agent Identity FIC → Agent User `user_fic`)
   - `delegated` — MSAL interactive auth with human's token, messages prefixed `[EntraClaw]`
@@ -35,9 +35,11 @@
 
 ## Active Work
 
-- **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phase 1 shipped, Phase 2 next.**
-  - Phase 1 (shipped, commit `f900ba1`): `BlobStore` async client in `src/entraclaw/storage/blob.py` (put/get/list/delete/exists + ETag concurrency + 401→TokenExpiredError). 22 tests in `tests/storage/test_blob.py`.
-  - Phase 2 (next): `MemoryBackend` protocol in `src/entraclaw/storage/backend.py` with `Local` and `Blob` implementations. Route `interaction_log.py`, `daily_summary.py`, and memory-file access through it. ~150 LOC. See ADR-005 §"Implementation phases" for the full 6-phase plan.
+- **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5 shipped; Phase 3 (CachedBlobBackend) next.**
+  - Phase 1 (commit `f900ba1`): `BlobStore` async client in `src/entraclaw/storage/blob.py` (put/get/list/delete/exists + ETag concurrency + 401→TokenExpiredError). 22 tests.
+  - Phase 2: `MemoryBackend` protocol in `src/entraclaw/storage/backend.py` with `LocalBackend` + `BlobBackend` + `get_backend()` factory. `interaction_log.py` and `daily_summary.py` route through it. 22 tests.
+  - Phase 5: `acquire_agent_user_storage_token` (parallel third hop for `https://storage.azure.com/.default`), `scripts/provision_blob_storage.py` (idempotent resource group + storage account + container + RBAC scoped to Agent User), `grant_agent_user_storage_consent` added to `create_entra_agent_ids.py` (grants `user_impersonation` on Azure Storage SP), `setup.sh --keep-memory-local` flag + Step 7b provisioning + migration prompt (idempotent, source-preserving), `src/entraclaw/storage/migration.py`. 23 tests. Setup now exits red + non-zero on migration failure.
+  - Phase 3 (next): `CachedBlobBackend` — write-through cache with local fallback for read when offline.
 - Multi-tenant lightweight chat — **landed to main** (commit `c8ec521`, PR #23369 abandoned-as-merged-externally). Spec: `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md`.
 
 ## Read These First
@@ -46,7 +48,7 @@
 - `prompts/agent_system.md` (agent behavioral rules — channel discipline, watch-only, reply detection)
 - `docs/architecture/DESIGN-teams-bot-gateway.md` (Bot Gateway design)
 - `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` (delegated mode spec — multi-tenant chat, now landed)
-- `docs/engineering-status.md` (current state: 385 tests, 3 auth modes, Phase 1-3 daily-summary stack live)
+- `docs/engineering-status.md` (current state: 442 tests, 3 auth modes, Phase 1-3 daily-summary stack live, ADR-005 Phases 1/2/5 live)
 - `docs/index.md`
 - `docs/runbooks/hard-won-learnings.md` (read before making changes — covers stdout-capture-into-env, lazy-init dead poll, schema-divergence killing MCP stream, et al.)
 - `docs/decisions/001-obo-flows-for-device-agents.md`

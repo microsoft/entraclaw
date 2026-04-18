@@ -34,6 +34,9 @@ logger = logging.getLogger("entraclaw.tools.teams")
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 TOKEN_ENDPOINT = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
 
+GRAPH_RESOURCE_SCOPE = "https://graph.microsoft.com/.default"
+STORAGE_RESOURCE_SCOPE = "https://storage.azure.com/.default"
+
 MAX_MESSAGE_LENGTH = 28_000
 
 
@@ -59,15 +62,22 @@ def _check_token_response(hop: str, data: dict) -> str:
     return token
 
 
-def acquire_agent_user_token(config: EntraClawConfig) -> str:
+def acquire_agent_user_token(
+    config: EntraClawConfig,
+    *,
+    resource_scope: str = GRAPH_RESOURCE_SCOPE,
+) -> str:
     """Acquire a delegated token for the Agent User via the three-hop flow.
 
     Hop 1: Blueprint → client_credentials → Blueprint token
     Hop 2: Agent Identity → FIC exchange (Blueprint token as assertion) → Agent Identity token
     Hop 3: Agent User → user_fic grant → delegated user token (idtyp=user)
 
-    The resulting token can call any Graph API requiring user context
-    (Teams, Exchange, OneDrive, etc.) as the Agent User identity.
+    The resulting token can call any resource the Agent User has been
+    consented for. *resource_scope* selects the resource at Hop 3 only —
+    Hops 1+2 always exchange against ``api://AzureADTokenExchange/.default``
+    (the FIC exchange scope). Defaults to Microsoft Graph; pass
+    :data:`STORAGE_RESOURCE_SCOPE` for Azure Blob Storage (ADR-005).
 
     Raises ``AgentIDNotAvailable`` if config is incomplete,
     or ``TokenExchangeError`` if any hop fails.
@@ -142,13 +152,13 @@ def acquire_agent_user_token(config: EntraClawConfig) -> str:
     # Hop 3: Agent User resource token via user_fic grant
     # Presents both T1 (client_assertion) and T2 (user_federated_identity_credential).
     # Entra validates T2.aud == Agent Identity, then issues a delegated token
-    # with idtyp=user for the Agent User.
+    # with idtyp=user for the Agent User scoped for *resource_scope*.
     with httpx.Client(timeout=timeout) as client:
         hop3_resp = client.post(
             url,
             data={
                 "client_id": config.agent_id,
-                "scope": "https://graph.microsoft.com/.default",
+                "scope": resource_scope,
                 "grant_type": "user_fic",
                 "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
                 "client_assertion": t1_token,
@@ -160,6 +170,17 @@ def acquire_agent_user_token(config: EntraClawConfig) -> str:
     resource_token = _check_token_response("hop3:agent_user", hop3_resp.json())
 
     return resource_token
+
+
+def acquire_agent_user_storage_token(config: EntraClawConfig) -> str:
+    """Three-hop variant for Azure Blob Storage (ADR-005).
+
+    Same first two hops as :func:`acquire_agent_user_token`; Hop 3 swaps
+    the resource scope from Graph to ``https://storage.azure.com/.default``.
+    Requires the Agent Identity to have been consented for Storage during
+    ``setup.sh``.
+    """
+    return acquire_agent_user_token(config, resource_scope=STORAGE_RESOURCE_SCOPE)
 
 
 async def create_one_on_one_chat(

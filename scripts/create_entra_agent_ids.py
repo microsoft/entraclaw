@@ -317,6 +317,11 @@ def create_agent_identity(token: str, blueprint_app_id: str) -> tuple[str, str]:
 # Resolved at runtime because it varies per tenant.
 MS_GRAPH_API_APP_ID = "00000003-0000-0000-c000-000000000000"
 
+# Azure Storage well-known app ID — the target SP for user_impersonation grants.
+# Resolved at runtime per tenant like the Graph SP above.
+AZURE_STORAGE_APP_ID = "e406a681-f3d4-42a8-90b6-c2b029497af1"
+AZURE_STORAGE_SCOPE = "user_impersonation"
+
 
 def _agent_user_upn(token: str) -> str:
     """Generate the UPN for the Agent User.
@@ -354,9 +359,14 @@ def _agent_user_upn(token: str) -> str:
 
 def _resolve_graph_sp_object_id(token: str) -> str | None:
     """Get the object ID of the Microsoft Graph service principal in this tenant."""
+    return _resolve_sp_object_id_by_app_id(token, MS_GRAPH_API_APP_ID)
+
+
+def _resolve_sp_object_id_by_app_id(token: str, app_id: str) -> str | None:
+    """Get the object ID of a service principal by its appId in this tenant."""
     resp = graph_request(
         "GET",
-        f"/servicePrincipals?$filter=appId eq '{MS_GRAPH_API_APP_ID}'&$select=id",
+        f"/servicePrincipals?$filter=appId eq '{app_id}'&$select=id",
         token,
     )
     if resp.status_code == 200:
@@ -596,6 +606,103 @@ def grant_agent_user_consent(
         print("  without this consent grant. Check that the provisioner has")
         print("  DelegatedPermissionGrant.ReadWrite.All permission.")
         sys.exit(1)
+
+
+def grant_agent_user_storage_consent(
+    token: str,
+    agent_identity_obj_id: str,
+    agent_user_obj_id: str,
+) -> None:
+    """Grant the Agent Identity permission to request Azure Storage tokens as the Agent User.
+
+    Creates/updates an oAuth2PermissionGrant with `user_impersonation` on the
+    Azure Storage service principal so the third hop of the three-hop flow can
+    exchange a `user_fic` grant for a `idtyp=user` token with
+    `https://storage.azure.com/.default` audience (ADR-005).
+    """
+    print("\n--- Granting Agent User storage consent ---\n")
+
+    storage_sp_id = _resolve_sp_object_id_by_app_id(token, AZURE_STORAGE_APP_ID)
+    if not storage_sp_id:
+        print("  WARN: Azure Storage SP not found in tenant — cannot grant consent.")
+        print("  This is non-fatal; cloud-hosted memory (ADR-005) will not work")
+        print("  until the grant is added manually or --keep-memory-local is set.")
+        return
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    from datetime import UTC, datetime
+
+    check_url = (
+        "https://graph.microsoft.com/v1.0/oauth2PermissionGrants"
+        f"?$filter=clientId eq '{agent_identity_obj_id}'"
+        f" and principalId eq '{agent_user_obj_id}'"
+        f" and resourceId eq '{storage_sp_id}'"
+    )
+    resp = requests.get(check_url, headers=headers)
+    if resp.status_code == 200:
+        existing = resp.json().get("value", [])
+        if existing:
+            grant = existing[0]
+            existing_scopes = set((grant.get("scope") or "").split())
+            if AZURE_STORAGE_SCOPE in existing_scopes:
+                print(f"  [skip] Storage consent already granted ({AZURE_STORAGE_SCOPE})")
+                return
+            merged = sorted(existing_scopes | {AZURE_STORAGE_SCOPE})
+            patch_url = f"https://graph.microsoft.com/v1.0/oauth2PermissionGrants/{grant['id']}"
+            patch_resp = requests.patch(
+                patch_url,
+                headers=headers,
+                json={"scope": " ".join(merged)},
+            )
+            if patch_resp.status_code in (200, 204):
+                print(f"  [updated] Added storage scope: {AZURE_STORAGE_SCOPE}")
+                return
+            print(
+                f"  WARN: Failed to patch storage consent ({patch_resp.status_code}): "
+                f"{patch_resp.text[:200]}"
+            )
+            print("  Falling through to create new grant...")
+
+    body = {
+        "clientId": agent_identity_obj_id,
+        "consentType": "Principal",
+        "principalId": agent_user_obj_id,
+        "resourceId": storage_sp_id,
+        "scope": AZURE_STORAGE_SCOPE,
+        "startTime": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+    for attempt in range(4):
+        resp = requests.post(
+            "https://graph.microsoft.com/v1.0/oauth2PermissionGrants",
+            headers=headers,
+            json=body,
+        )
+        if resp.status_code in (200, 201):
+            print(f"  [new] Storage consent granted: {AZURE_STORAGE_SCOPE}")
+            return
+
+        resp_text = resp.text
+        is_propagation = (
+            "Principal was not found" in resp_text
+            or "does not exist" in resp_text
+            or resp.status_code == 404
+        )
+        if is_propagation and attempt < 3:
+            wait = 15 * (attempt + 1)
+            print(f"  Storage SP/User not yet propagated — waiting {wait}s (attempt {attempt + 1}/4)...")
+            time.sleep(wait)
+            continue
+
+        print(f"  WARN: Storage consent grant failed ({resp.status_code})")
+        print(f"  Response: {resp_text[:400]}")
+        print("  Cloud-hosted memory (ADR-005) will not work until this is resolved.")
+        print("  Re-run this script or set ENTRACLAW_KEEP_MEMORY_LOCAL=true to bypass.")
+        return
 
 
 # ---------------------------------------------------------------------------
@@ -845,6 +952,7 @@ def main() -> int:
         agent_user_id, agent_user_upn = create_agent_user(token, agent_obj_id)
 
     grant_agent_user_consent(token, agent_obj_id, agent_user_id)
+    grant_agent_user_storage_consent(token, agent_obj_id, agent_user_id)
     assign_license_to_agent_user(token, agent_user_id)
 
     print("\n--- Summary ---\n")

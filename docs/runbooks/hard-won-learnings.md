@@ -306,6 +306,24 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 **Fix:** Background `_background_discover_chats()` task hits `GET /me/chats` every 120s and registers any chat not in `_state["watched_chats"]`. Catches chats from raw Python, MCP tool, or external-add. Also persists to file so restarts inherit. Net latency from "chat exists" → "agent watching it": ≤2m05s.
 **Prevention:** Don't rely on a single entry point for state-shaping side effects. If "I want all chats polled," that's a property of the polling system, not of the tool that happens to create chats. Auto-discovery via the canonical Graph endpoint is more robust.
 
+### Learning #34: Storage Scope Needs Its Own Consent Grant — RBAC Alone Isn't Enough
+
+**Date:** 2026-04-17
+**Context:** ADR-005 Phase 5 shipped. Setup.sh successfully provisioned the storage account, container, and `Storage Blob Data Contributor` RBAC scoped to the Agent User's oid. Then migration failed on every file with `AADSTS65001: The user or administrator has not consented to use the application`.
+**Problem:** RBAC governs **what a token can do**. The third hop of the Agent User flow (`user_fic` grant for `https://storage.azure.com/.default`) only succeeds if there's an existing `oauth2PermissionGrant` authorizing the Agent Identity to request delegated Storage scopes **on behalf of** the Agent User. Storage RBAC is necessary but not sufficient.
+**Root cause:** The provisioner only did Azure resource-plane work (`az storage ...`, `az role assignment create`). It never touched Graph to add the `user_impersonation` scope grant on the Azure Storage SP (appId `e406a681-f3d4-42a8-90b6-c2b029497af1`).
+**Fix:** Added `grant_agent_user_storage_consent()` to `scripts/create_entra_agent_ids.py` — same Principal-scoped `oauth2PermissionGrant` pattern as the existing Graph consent, but targeting the Storage SP with scope `user_impersonation`. Wired into `main()`. Idempotent (PATCH to merge scopes if grant already exists).
+**Prevention:** For any new resource-plane capability that the Agent User needs to act against, the provisioning flow has TWO steps: (1) Azure data-plane RBAC, and (2) Graph `oauth2PermissionGrant` for the delegated scope on that resource's SP. Both are required. Separate `_resolve_sp_object_id_by_app_id(token, app_id)` helper makes adding future resource scopes trivial.
+
+### Learning #35: Setup.sh Must Track Sub-Step Failures — Don't Print "Setup Complete" After a Failed Migration
+
+**Date:** 2026-04-17
+**Context:** Step 7b migration printed 10 errors in plain text, then `[8/8] Setup complete` banner in green. User correctly called this out as brittle.
+**Problem:** `setup.sh` steps were treated as pass/fail at the shell-exit-code level only, but a Python heredoc that iterates files and collects errors in a list doesn't exit non-zero unless the entire script raises. The inner migration saw 10 AADSTS errors but completed "successfully."
+**Root cause:** The inline `python -c` heredoc printed errors to stdout but exited 0. There was no shell-level tracking of sub-step failure, and the summary banner unconditionally printed "Setup complete".
+**Fix:** (1) Python heredoc now calls `sys.exit(2)` when `report.errors` is non-empty. (2) Shell captures that exit code into `MIGRATION_FAILED` flag via `|| MIGRATION_RC=$?`. (3) Summary banner branches on `MIGRATION_FAILED` — renders red "Setup INCOMPLETE" block instead of green "Setup complete". (4) Script exits with code 2 on failure. (5) Errors render in ANSI red so they don't hide in the success-green noise.
+**Prevention:** Any multi-step shell orchestrator that calls sub-tools must: (a) treat sub-tool non-zero exit as first-class failure data, (b) never paint over failures in the final summary, (c) render error output in a visually distinct color, (d) propagate the failure via its own exit code so CI / wrapping automation sees it.
+
 ---
 
 ## Historical Learnings

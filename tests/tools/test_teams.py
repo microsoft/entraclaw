@@ -200,6 +200,92 @@ class TestAcquireAgentUserToken:
         assert hop3_body["user_federated_identity_credential"] == "agent-id-token"
         assert hop3_body["requested_token_use"] == "on_behalf_of"
 
+    @respx.mock
+    def test_default_resource_scope_is_graph(self) -> None:
+        """Default scope at Hop 3 must remain Graph for backward compatibility."""
+        route = respx.post(TOKEN_URL).mock(side_effect=[
+            httpx.Response(200, json={"access_token": "bp-token"}),
+            httpx.Response(200, json={"access_token": "agent-id-token"}),
+            httpx.Response(200, json={"access_token": "graph-token"}),
+        ])
+        with (
+            patch.dict(os.environ, FULL_ENV, clear=False),
+            patch(_P_STORE, return_value=_mock_credential_store()),
+            patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
+        ):
+            from entraclaw.config import get_config
+
+            acquire_agent_user_token(get_config())
+
+        hop3_body = dict(
+            x.split("=") for x in route.calls[2].request.content.decode().split("&")
+        )
+        # URL-encoded "https://graph.microsoft.com/.default"
+        assert "graph.microsoft.com" in hop3_body["scope"]
+
+    @respx.mock
+    def test_resource_scope_override(self) -> None:
+        """Explicit resource_scope must replace the Hop 3 scope only."""
+        from entraclaw.tools.teams import STORAGE_RESOURCE_SCOPE
+
+        route = respx.post(TOKEN_URL).mock(side_effect=[
+            httpx.Response(200, json={"access_token": "bp-token"}),
+            httpx.Response(200, json={"access_token": "agent-id-token"}),
+            httpx.Response(200, json={"access_token": "storage-token"}),
+        ])
+        with (
+            patch.dict(os.environ, FULL_ENV, clear=False),
+            patch(_P_STORE, return_value=_mock_credential_store()),
+            patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
+        ):
+            from entraclaw.config import get_config
+
+            token = acquire_agent_user_token(
+                get_config(), resource_scope=STORAGE_RESOURCE_SCOPE
+            )
+
+        assert token == "storage-token"
+        # Hops 1 and 2 still target the FIC exchange scope
+        hop1_body = dict(
+            x.split("=") for x in route.calls[0].request.content.decode().split("&")
+        )
+        hop2_body = dict(
+            x.split("=") for x in route.calls[1].request.content.decode().split("&")
+        )
+        assert "AzureADTokenExchange" in hop1_body["scope"]
+        assert "AzureADTokenExchange" in hop2_body["scope"]
+        # Hop 3 carries the storage resource
+        hop3_body = dict(
+            x.split("=") for x in route.calls[2].request.content.decode().split("&")
+        )
+        assert "storage.azure.com" in hop3_body["scope"]
+
+
+class TestAcquireAgentUserStorageToken:
+    @respx.mock
+    def test_uses_storage_scope(self) -> None:
+        from entraclaw.tools.teams import acquire_agent_user_storage_token
+
+        route = respx.post(TOKEN_URL).mock(side_effect=[
+            httpx.Response(200, json={"access_token": "bp-token"}),
+            httpx.Response(200, json={"access_token": "agent-id-token"}),
+            httpx.Response(200, json={"access_token": "storage-tok"}),
+        ])
+        with (
+            patch.dict(os.environ, FULL_ENV, clear=False),
+            patch(_P_STORE, return_value=_mock_credential_store()),
+            patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
+        ):
+            from entraclaw.config import get_config
+
+            token = acquire_agent_user_storage_token(get_config())
+
+        assert token == "storage-tok"
+        hop3_body = dict(
+            x.split("=") for x in route.calls[2].request.content.decode().split("&")
+        )
+        assert "storage.azure.com" in hop3_body["scope"]
+
 
 # ---------------------------------------------------------------------------
 # create_or_find_chat

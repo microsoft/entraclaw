@@ -30,9 +30,8 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 
-from entraclaw.config import get_config
+from entraclaw.storage.backend import get_backend
 
 logger = logging.getLogger("entraclaw.tools.interaction_log")
 
@@ -44,12 +43,9 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _interactions_dir() -> Path:
-    """Return the interactions directory, creating it lazily."""
-    cfg = get_config()
-    d = cfg.data_dir / "interactions"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def _interaction_key(day: str) -> str:
+    """Backend key for the day's interaction log."""
+    return f"interactions/{day}.jsonl"
 
 
 def detect_channel(chat_id: str | None) -> str:
@@ -108,9 +104,10 @@ def log_interaction(
     if metadata is not None:
         entry["metadata"] = metadata
 
-    log_file = _interactions_dir() / f"{ts.strftime('%Y-%m-%d')}.jsonl"
-    with open(log_file, "a") as fh:
-        fh.write(json.dumps(entry) + "\n")
+    get_backend().append_text(
+        _interaction_key(ts.strftime("%Y-%m-%d")),
+        json.dumps(entry) + "\n",
+    )
 
     logger.debug(
         "interaction: %s %s %s → %s",
@@ -124,21 +121,20 @@ def log_interaction(
 
 def read_day(day: str) -> list[dict]:
     """Return all interaction entries for the given UTC day (YYYY-MM-DD)."""
-    log_file = _interactions_dir() / f"{day}.jsonl"
-    if not log_file.exists():
+    raw = get_backend().read_text(_interaction_key(day))
+    if raw is None:
         return []
 
     entries: list[dict] = []
-    with open(log_file) as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(json.loads(line))
-            except json.JSONDecodeError:
-                logger.warning(
-                    "skipping corrupt line in %s: %s", log_file.name, line[:80]
-                )
-                continue
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            logger.warning(
+                "skipping corrupt line in %s.jsonl: %s", day, line[:80]
+            )
+            continue
     return entries

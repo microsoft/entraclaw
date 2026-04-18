@@ -25,12 +25,21 @@ This script will:
 2. Create an Agent Identity Blueprint + BlueprintPrincipal + Agent Identity
 3. Create an Agent User (Entra user account linked to the Agent Identity)
 4. Auto-assign a Teams-capable M365 license (scans tenant for E3/E5/Teams Enterprise)
-5. Grant consent for Teams/Chat Graph permissions
+5. Grant consent for Teams/Chat Graph permissions **and Azure Storage `user_impersonation`** (ADR-005)
 6. Generate a self-signed certificate, upload public key to Entra, store private key in OS keystore (Keychain/TPM/Keyring) — no secrets on disk
 7. Write `.env` with configuration (no secrets — only the cert thumbprint)
+7b. **Provision Azure Blob Storage for agent memory** (ADR-005) — resource group, storage account, container, RBAC scoped to the Agent User. Idempotent. Skipped with `--keep-memory-local`. Prompts to migrate existing `~/.entraclaw/data` into the blob (source files are NEVER deleted)
 8. Write `.mcp.json` for auto-discovery by Claude Code / Copilot CLI
 
-The script is **idempotent** — safe to re-run. State persists in `.entraclaw-state.json`.
+The script is **idempotent** — safe to re-run after any failure. State persists in `.entraclaw-state.json`. If migration fails, the summary banner turns red and the script exits non-zero.
+
+**Opt-out:** If you want to evaluate before trusting cloud sync, or you're offline/air-gapped, pass `--keep-memory-local`:
+
+```bash
+./scripts/setup.sh --keep-memory-local
+```
+
+This sets `ENTRACLAW_KEEP_MEMORY_LOCAL=true` in `.env` and skips the storage account + container + migration. Memory stays in `~/.entraclaw/data` on the local filesystem. You can switch to cloud later by re-running without the flag.
 
 #### Multi-user and cross-tenant setup
 

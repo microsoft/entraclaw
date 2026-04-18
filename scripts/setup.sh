@@ -24,6 +24,7 @@ TOTAL_STEPS=8
 SWITCH_USER=false
 TEAMS_USER_EMAIL=""
 SHOW_HELP=false
+KEEP_MEMORY_LOCAL=false
 
 for arg in "$@"; do
     case $arg in
@@ -32,6 +33,9 @@ for arg in "$@"; do
             ;;
         --teams-user=*)
             TEAMS_USER_EMAIL="${arg#--teams-user=}"
+            ;;
+        --keep-memory-local)
+            KEEP_MEMORY_LOCAL=true
             ;;
         --help|-h)
             SHOW_HELP=true
@@ -52,6 +56,10 @@ if [ "$SHOW_HELP" = true ]; then
     echo "  --teams-user=EMAIL     Set a different user as the Teams chat recipient."
     echo "                         The az CLI user remains the admin/provisioner."
     echo "                         e.g., --teams-user=brandon@werner.ac"
+    echo "  --keep-memory-local    Skip Azure Blob Storage provisioning. Agent memory"
+    echo "                         stays on the local filesystem (~/.entraclaw/data)."
+    echo "                         Use for offline/air-gapped environments or to"
+    echo "                         evaluate before trusting cloud sync (ADR-005)."
     echo "  --help, -h             Show this help"
     exit 0
 fi
@@ -67,6 +75,8 @@ NC='\033[0m'
 step()    { echo -e "\n${BLUE}[$1/$TOTAL_STEPS]${NC} $2"; }
 success() { echo -e "  ${GREEN}✅ $1${NC}"; }
 warn()    { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
+err()     { echo -e "  ${RED}❌ $1${NC}"; }
+MIGRATION_FAILED=false
 fail()    { echo -e "  ${RED}❌ $1${NC}"; exit 1; }
 
 # ── Resolve project root ────────────────────────────────────────────────────
@@ -541,14 +551,108 @@ chmod 600 .env
 success ".env file created (chmod 600)"
 
 # ════════════════════════════════════════════════════════════════════════════
+# Step 7b: Azure Blob Storage provisioning (ADR-005)
+# ════════════════════════════════════════════════════════════════════════════
+if [ "$KEEP_MEMORY_LOCAL" = true ]; then
+    echo "" >> .env
+    echo "# ADR-005: keep agent memory local (skip cloud sync)" >> .env
+    echo "ENTRACLAW_KEEP_MEMORY_LOCAL=true" >> .env
+    success "Memory mode: LOCAL (--keep-memory-local set)"
+elif [ -z "${AGENT_USER_ID:-}" ]; then
+    warn "Skipping blob storage — no Agent User to scope RBAC against"
+else
+    echo ""
+    echo -e "${BLUE}[7b]${NC} Provisioning Azure Blob Storage for agent memory (ADR-005)"
+
+    PROVISION_OUT=$("$PYTHON" "$PROJECT_ROOT/scripts/provision_blob_storage.py" \
+        --tenant-id "$TENANT_ID" \
+        --agent-user-object-id "$AGENT_USER_ID" \
+        2>&1 1>/tmp/entraclaw-provision-stdout.$$)
+    PROVISION_RC=$?
+    PROVISION_STDOUT=$(cat /tmp/entraclaw-provision-stdout.$$)
+    rm -f /tmp/entraclaw-provision-stdout.$$
+    # Echo the provisioner's progress lines (it prints them to stderr)
+    echo "$PROVISION_OUT" | sed 's/^/  /'
+
+    if [ $PROVISION_RC -ne 0 ]; then
+        warn "Blob storage provisioning failed — falling back to local-only memory"
+        echo "" >> .env
+        echo "# ADR-005: provisioning failed, using local-only memory" >> .env
+        echo "ENTRACLAW_KEEP_MEMORY_LOCAL=true" >> .env
+    else
+        BLOB_ENDPOINT=$(echo "$PROVISION_STDOUT" | grep '^BLOB_ENDPOINT=' | cut -d= -f2-)
+        BLOB_CONTAINER=$(echo "$PROVISION_STDOUT" | grep '^BLOB_CONTAINER=' | cut -d= -f2-)
+        if [ -z "$BLOB_ENDPOINT" ] || [ -z "$BLOB_CONTAINER" ]; then
+            warn "Provisioner returned no endpoint/container — using local-only memory"
+            echo "" >> .env
+            echo "ENTRACLAW_KEEP_MEMORY_LOCAL=true" >> .env
+        else
+            echo "" >> .env
+            echo "# ADR-005: cloud-hosted agent memory (Azure Blob Storage)" >> .env
+            echo "ENTRACLAW_BLOB_ENDPOINT=$BLOB_ENDPOINT" >> .env
+            echo "ENTRACLAW_BLOB_CONTAINER=$BLOB_CONTAINER" >> .env
+            success "Blob storage ready: $BLOB_ENDPOINT/$BLOB_CONTAINER"
+
+            # Migration prompt — upload existing local data, leave it in place
+            DATA_DIR="${ENTRACLAW_DATA_DIR:-$HOME/.entraclaw/data}"
+            if [ -d "$DATA_DIR" ] && [ -n "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then
+                LOCAL_BYTES=$(du -sk "$DATA_DIR" 2>/dev/null | awk '{print $1}')
+                echo ""
+                echo -n "  Upload existing local memory (~${LOCAL_BYTES} KB from $DATA_DIR) to blob? [y/N] "
+                read -r MIGRATE_REPLY
+                if [ "$MIGRATE_REPLY" = "y" ] || [ "$MIGRATE_REPLY" = "Y" ]; then
+                    MIGRATION_RC=0
+                    "$PYTHON" -c "
+import sys
+from pathlib import Path
+from entraclaw.storage.backend import get_backend
+from entraclaw.storage.migration import migrate_local_to_backend
+RED = '\033[0;31m'
+GREEN = '\033[0;32m'
+NC = '\033[0m'
+report = migrate_local_to_backend(Path('$DATA_DIR'), get_backend())
+print(f'  {GREEN}Copied:{NC} {report.copied} files ({report.bytes_copied} bytes)')
+print(f'  Skipped (already in cloud): {report.skipped}')
+if report.errors:
+    print(f'  {RED}Errors: {len(report.errors)}{NC}')
+    for k, e in report.errors[:5]:
+        print(f'    {RED}- {k}:{NC} {e}')
+    sys.exit(2)
+" || MIGRATION_RC=$?
+                    if [ "$MIGRATION_RC" -ne 0 ]; then
+                        MIGRATION_FAILED=true
+                        err "Migration FAILED — cloud memory is not in sync with local"
+                        echo -e "    ${YELLOW}Hint:${NC} most common cause is missing storage consent for the"
+                        echo -e "          Agent Identity. Re-run ${BLUE}./scripts/setup.sh${NC} (idempotent) or"
+                        echo -e "          ${BLUE}python scripts/create_entra_agent_ids.py${NC} to grant it, then retry."
+                    else
+                        success "Migration complete (local files left untouched)"
+                    fi
+                else
+                    echo "  Skipped migration. You can run it later with:"
+                    echo "    .venv/bin/python -c 'from entraclaw.storage.backend import get_backend; from entraclaw.storage.migration import migrate_local_to_backend; from pathlib import Path; print(migrate_local_to_backend(Path(\"$DATA_DIR\"), get_backend()))'"
+                fi
+            fi
+        fi
+    fi
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
 # Step 8: Summary
 # ════════════════════════════════════════════════════════════════════════════
 step 8 "Setup complete — summary"
 
 echo ""
-echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║  Setup complete!                                             ║${NC}"
-echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
+if [ "$MIGRATION_FAILED" = true ]; then
+    echo -e "${RED}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║  Setup INCOMPLETE — migration failed                         ║${NC}"
+    echo -e "${RED}║  Cloud memory is not in sync with local disk.                ║${NC}"
+    echo -e "${RED}╚══════════════════════════════════════════════════════════════╝${NC}"
+else
+    echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║  Setup complete!                                             ║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
+fi
 echo ""
 echo -e "  Provisioner: ${BLUE}$PROV_CLIENT_ID${NC}"
 echo -e "  Blueprint:   ${BLUE}$BLUEPRINT_APP_ID${NC}"
@@ -596,3 +700,9 @@ echo -e "  2. Run tests: ${BLUE}$PROJECT_ROOT/.venv/bin/pytest -v${NC}"
 echo -e "  3. Restart Claude Code / Copilot CLI in this project — the MCP server"
 echo -e "     will be auto-discovered from ${BLUE}.mcp.json${NC}"
 echo ""
+
+if [ "$MIGRATION_FAILED" = true ]; then
+    echo -e "  ${RED}Re-run ${BLUE}./scripts/setup.sh${RED} after fixing the migration error above.${NC}"
+    echo ""
+    exit 2
+fi
