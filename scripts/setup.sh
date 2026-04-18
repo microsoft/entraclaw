@@ -593,12 +593,39 @@ else
             echo "ENTRACLAW_BLOB_CONTAINER=$BLOB_CONTAINER" >> .env
             success "Blob storage ready: $BLOB_ENDPOINT/$BLOB_CONTAINER"
 
-            # Migration prompt — upload existing local data, leave it in place
+            # Migration prompt — upload existing local data + Claude Code
+            # persona memory (ADR-005 Phase 6a), leave both trees in place.
             DATA_DIR="${ENTRACLAW_DATA_DIR:-$HOME/.entraclaw/data}"
-            if [ -d "$DATA_DIR" ] && [ -n "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then
-                LOCAL_BYTES=$(du -sk "$DATA_DIR" 2>/dev/null | awk '{print $1}')
+            # Resolve Claude Code per-project memory dir (may be absent).
+            PERSONA_DIR=$("$PYTHON" -c "
+from pathlib import Path
+from entraclaw.storage.persona import claude_code_memory_dir
+print(claude_code_memory_dir(Path('$PROJECT_ROOT')))
+" 2>/dev/null || echo "")
+            HAS_DATA=false
+            HAS_PERSONA=false
+            [ -d "$DATA_DIR" ] && [ -n "$(ls -A "$DATA_DIR" 2>/dev/null)" ] && HAS_DATA=true
+            [ -n "$PERSONA_DIR" ] && [ -d "$PERSONA_DIR" ] && [ -n "$(ls -A "$PERSONA_DIR" 2>/dev/null)" ] && HAS_PERSONA=true
+
+            if [ "$HAS_DATA" = true ] || [ "$HAS_PERSONA" = true ]; then
+                TOTAL_KB=0
+                DESC_PARTS=""
+                if [ "$HAS_DATA" = true ]; then
+                    DATA_KB=$(du -sk "$DATA_DIR" 2>/dev/null | awk '{print $1}')
+                    TOTAL_KB=$((TOTAL_KB + DATA_KB))
+                    DESC_PARTS="agent data"
+                fi
+                if [ "$HAS_PERSONA" = true ]; then
+                    PERSONA_KB=$(du -sk "$PERSONA_DIR" 2>/dev/null | awk '{print $1}')
+                    TOTAL_KB=$((TOTAL_KB + PERSONA_KB))
+                    if [ -n "$DESC_PARTS" ]; then
+                        DESC_PARTS="$DESC_PARTS + Claude Code persona memory"
+                    else
+                        DESC_PARTS="Claude Code persona memory"
+                    fi
+                fi
                 echo ""
-                echo -n "  Upload existing local memory (~${LOCAL_BYTES} KB from $DATA_DIR) to blob? [y/N] "
+                echo -n "  Upload existing local memory (~${TOTAL_KB} KB, $DESC_PARTS) to blob? [y/N] "
                 read -r MIGRATE_REPLY
                 if [ "$MIGRATE_REPLY" = "y" ] || [ "$MIGRATE_REPLY" = "Y" ]; then
                     MIGRATION_RC=0
@@ -610,7 +637,12 @@ from entraclaw.storage.migration import migrate_local_to_backend
 RED = '\033[0;31m'
 GREEN = '\033[0;32m'
 NC = '\033[0m'
-report = migrate_local_to_backend(Path('$DATA_DIR'), get_backend())
+sources = []
+if '$HAS_DATA' == 'true':
+    sources.append((Path('$DATA_DIR'), ''))
+if '$HAS_PERSONA' == 'true':
+    sources.append((Path('$PERSONA_DIR'), 'claude_memory'))
+report = migrate_local_to_backend(sources, get_backend())
 print(f'  {GREEN}Copied:{NC} {report.copied} files ({report.bytes_copied} bytes)')
 print(f'  Skipped (already in cloud): {report.skipped}')
 if report.errors:
@@ -630,7 +662,8 @@ if report.errors:
                     fi
                 else
                     echo "  Skipped migration. You can run it later with:"
-                    echo "    .venv/bin/python -c 'from entraclaw.storage.backend import get_backend; from entraclaw.storage.migration import migrate_local_to_backend; from pathlib import Path; print(migrate_local_to_backend(Path(\"$DATA_DIR\"), get_backend()))'"
+                    echo "    .venv/bin/python scripts/claude_memory_sync.py push   # persona files"
+                    echo "    .venv/bin/python -c 'from entraclaw.storage.backend import get_backend; from entraclaw.storage.migration import migrate_local_to_backend; from pathlib import Path; print(migrate_local_to_backend([(Path(\"$DATA_DIR\"), \"\")], get_backend()))'"
                 fi
             fi
         fi

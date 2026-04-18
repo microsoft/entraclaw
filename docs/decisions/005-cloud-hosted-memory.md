@@ -1,7 +1,7 @@
 # ADR-005: Cloud-Hosted Memory via Azure Blob Storage
 
 **Date:** 2026-04-17
-**Status:** Accepted (open questions resolved 2026-04-17; **Phases 1, 2, 5 shipped** — Phase 3 next)
+**Status:** Accepted (open questions resolved 2026-04-17; **Phases 1, 2, 5, 6a shipped** — Phase 6b next)
 **Deciders:** Brandon Werner, EntraClaw Agent
 **Context:** Agent memory portability across machines + foundation for a later cloud-hosted poller
 

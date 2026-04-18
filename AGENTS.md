@@ -18,8 +18,8 @@
 
 ## Current Runtime Model
 
-- Python 3.12+ research project — no deployed service yet (**442 tests** as of 2026-04-17)
-- Eight modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `storage/` (cloud-memory backend: `BlobStore` + `MemoryBackend` protocol + `migration` helper — ADR-005 Phases 1, 2, 5 shipped) → `mcp_server.py` (FastMCP + background channel)
+- Python 3.12+ research project — no deployed service yet (**449 tests** as of 2026-04-17)
+- Eight modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `storage/` (cloud-memory backend: `BlobStore` + `MemoryBackend` protocol + `PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
 - External dependencies: Microsoft Entra ID, Microsoft Teams + Outlook mailbox (via Graph API or Bot Framework), Azure Blob Storage (agent memory, provisioned by setup.sh)
 - Three auth modes via `ENTRACLAW_MODE`: `agent_user` (three-hop), `delegated` (MSAL), `bot` (M365 Agents SDK). Agent memory has a **parallel third hop** against `https://storage.azure.com/.default` (`acquire_agent_user_storage_token`).
 - Certificate auth: private key in OS keystore (Keychain/TPM/Keyring), JWT assertion for Hop 1 (ADR-003)
@@ -30,10 +30,11 @@
 
 ## Active Work
 
-- **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5 shipped; Phase 3 (CachedBlobBackend) next.**
+- **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped; Phase 6b (session_digest writer) next.**
   - Phase 1: `BlobStore` async client (`src/entraclaw/storage/blob.py`) — 22 tests.
   - Phase 2: `MemoryBackend` protocol + `LocalBackend` / `BlobBackend` + `get_backend()` factory (`src/entraclaw/storage/backend.py`) routing `interaction_log.py` + `daily_summary.py` — 22 tests.
   - Phase 5: `acquire_agent_user_storage_token` third-hop, `scripts/provision_blob_storage.py` (idempotent Storage Account + container + RBAC), storage-scope consent grant in `create_entra_agent_ids.py`, `setup.sh --keep-memory-local` flag + migration prompt, `src/entraclaw/storage/migration.py` helper — 23 tests.
+  - Phase 6a: `PersonaBackend` + `claude_code_memory_dir()` in `src/entraclaw/storage/persona.py`, `scripts/claude_memory_sync.py` CLI, `migrate_local_to_backend` extended to `list[(source, prefix)]` pairs, `.claude/settings.json` SessionStart-pull + PostToolUse-Write-push hooks (gated on `ENTRACLAW_PERSONA_SYNC=on`), `/refresh-persona` skill — 28 new tests.
 - Multi-tenant lightweight chat — landed to `main` (commit `c8ec521`).
 
 ## Read These First

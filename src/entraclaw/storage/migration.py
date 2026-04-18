@@ -1,18 +1,26 @@
-"""Local→backend migration helper for ADR-005 Phase 5.
+"""Local→backend migration helper (ADR-005 Phase 5 + Phase 6a).
 
-Walks an existing local data directory (typically ``~/.entraclaw/data``)
-and copies every file into a target :class:`MemoryBackend` (typically
-:class:`BlobBackend`). Idempotent by design: re-runs after a partial
-failure resume cleanly because already-present keys are skipped, with
-the target's content treated as authoritative (per ADR §"Migration":
-"blob becomes the source of truth, local is now a cache").
+Phase 5 moved the agent's operational data (``~/.entraclaw/data``) into
+:class:`BlobBackend`. Phase 6a extends the signature to accept *multiple*
+(local_root, blob_prefix) pairs so the Claude Code persona-memory
+directory can migrate in the same atomic call as the agent data.
 
-Source files are *never* deleted — that's the rollback path for
-``ENTRACLAW_KEEP_MEMORY_LOCAL=true``.
+Behavior per pair:
+- Walks *local_root* depth-first, copying each file to
+  ``{blob_prefix}/{relpath}`` (or just ``{relpath}`` when prefix is ``""``).
+- Idempotent: a key already present in the target is skipped — cloud is
+  authoritative on rerun (ADR §"Migration").
+- Source files are never deleted — that's the rollback path for
+  ``ENTRACLAW_KEEP_MEMORY_LOCAL=true``.
+- Missing pairs (local_root doesn't exist) are skipped silently so a
+  user without Claude Code's memory directory still migrates cleanly.
+- Per-file errors are captured in ``report.errors`` rather than raised
+  so one bad file doesn't abort the whole migration.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,28 +40,41 @@ class MigrationReport:
 
 
 def migrate_local_to_backend(
-    local_root: Path, target: MemoryBackend
+    sources: Iterable[tuple[Path, str]], target: MemoryBackend
 ) -> MigrationReport:
-    """Copy every file under *local_root* into *target*.
+    """Copy every file under each source into *target*.
 
-    Keys are the POSIX-style relative path from *local_root* (so a file
-    at ``<root>/interactions/2026-04-17.jsonl`` becomes the key
-    ``"interactions/2026-04-17.jsonl"``).
+    *sources* is an iterable of ``(local_root, blob_prefix)`` pairs. An
+    empty prefix (``""``) means "root of the blob container" — that's
+    the Phase 5 agent-data case. A populated prefix (e.g.
+    ``"claude_memory"``) groups a source under a subdirectory.
 
-    A non-existent or empty *local_root* returns an empty report.
-    Files already present in *target* are skipped (cloud is authoritative
-    on rerun). Per-file errors are captured in ``report.errors`` rather
-    than raised, so one bad file doesn't abort the whole migration.
+    Keys are the POSIX-style relative path from *local_root*, prefixed
+    with ``{blob_prefix}/`` when the prefix is non-empty.
     """
     report = MigrationReport()
-    root = Path(local_root)
-    if not root.exists():
-        return report
+    for local_root, prefix in sources:
+        _migrate_one_source(Path(local_root), prefix, target, report)
+    return report
 
-    for path in sorted(root.rglob("*")):
+
+def _migrate_one_source(
+    local_root: Path,
+    prefix: str,
+    target: MemoryBackend,
+    report: MigrationReport,
+) -> None:
+    if not local_root.exists():
+        return
+
+    # Normalize prefix: "" stays "", else ensure single trailing slash.
+    key_prefix = f"{prefix}/" if prefix else ""
+
+    for path in sorted(local_root.rglob("*")):
         if not path.is_file():
             continue
-        key = path.relative_to(root).as_posix()
+        rel = path.relative_to(local_root).as_posix()
+        key = f"{key_prefix}{rel}"
         try:
             if target.exists(key):
                 report.skipped += 1
@@ -70,5 +91,3 @@ def migrate_local_to_backend(
         report.copied += 1
         report.bytes_copied += len(content)
         report.keys_copied.append(key)
-
-    return report

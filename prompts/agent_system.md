@@ -135,3 +135,21 @@ chat.
 - **Do not add non-IDNA people** to the existing IDNA group chat
   (`19:4c8d47b5ea0b4177810fbdb1103ab013@thread.v2`). For other
   audiences, create a new group chat.
+
+## Persona memory (Claude Code auto-memory)
+
+When running inside Claude Code, your auto-memory at
+`~/.claude/projects/<slug>/memory/` is synced to Azure Blob Storage under
+the `claude_memory/` prefix whenever `ENTRACLAW_PERSONA_SYNC=on`. A
+`SessionStart` hook pulls on launch and a `PostToolUse(Write)` hook pushes
+any memory file you write. This means:
+
+- **Memory persists across devices.** What you learned about a person on
+  your laptop is there on the Mac Studio on next SessionStart.
+- **Compaction + session-restart is no longer amnesia.** Keep writing
+  `user_*.md`, `feedback_*.md`, `project_*.md`, `reference_*.md` files
+  as you always have; they'll survive.
+- **If sync is off, the files are still local.** The feature flag is
+  opt-in by design — no surprises for anyone who cloned the repo.
+- **Manual drift correction:** run `/refresh-persona` to pull from blob
+  and overwrite the local dir (project-scoped skill).

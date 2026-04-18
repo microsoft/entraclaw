@@ -2,7 +2,7 @@
 
 **Date:** April 17, 2026
 **Team:** Brandon Werner
-**Status:** Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **442 tests.** 11 MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat landed. Phase 1-3 daily-summary stack live (interaction log → email poll → triage email). **ADR-005 cloud-memory: Phases 1, 2, 5 shipped** — Phase 3 (CachedBlobBackend) next.
+**Status:** Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **449 tests.** 11 MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat landed. Phase 1-3 daily-summary stack live (interaction log → email poll → triage email). **ADR-005 cloud-memory: Phases 1, 2, 5, 6a shipped** — Phase 6b (session_digest writer) next.
 
 ---
 
@@ -20,6 +20,7 @@
 - **ADR-005 Phase 1 (`f900ba1`)** — `BlobStore` async client in `src/entraclaw/storage/blob.py`. 22 tests.
 - **ADR-005 Phase 2** — `MemoryBackend` protocol + `LocalBackend` / `BlobBackend` impls + `get_backend()` factory in `src/entraclaw/storage/backend.py`. `interaction_log.py` and `daily_summary.py` route through it. 22 tests.
 - **ADR-005 Phase 5** — `acquire_agent_user_storage_token` (storage-scope third hop), `--keep-memory-local` flag in `setup.sh`, `scripts/provision_blob_storage.py` (idempotent Storage Account + container + RBAC), migration helper in `src/entraclaw/storage/migration.py`, blob endpoint/container/keep-memory-local config fields. 23 tests.
+- **ADR-005 Phase 6a** — Claude Code persona-memory sync (per `docs/plans/persona-persistence.md`). `PersonaBackend` + `claude_code_memory_dir()` in `src/entraclaw/storage/persona.py` (thin wrapper scoped to `claude_memory/` blob prefix). `scripts/claude_memory_sync.py` CLI with `pull` / `push` / `push-one` subcommands. `migrate_local_to_backend` signature extended to accept `list[(source, prefix)]` pairs so setup.sh Step 7b covers agent data + persona memory in one idempotent pass. `.claude/settings.json` adds `SessionStart` (pull) + `PostToolUse` on `Write` (push-one), both gated on `ENTRACLAW_PERSONA_SYNC=on`. `/refresh-persona` skill added as a manual drift-correction safety valve. +28 tests.
 - **Multi-tenant lightweight chat** — landed to `main` (commit `c8ec521`, 47 commits, +9331/-2484).
 
 ---

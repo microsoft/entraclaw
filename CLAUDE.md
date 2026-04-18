@@ -35,12 +35,27 @@
 
 ## Active Work
 
-- **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5 shipped; Phase 3 (CachedBlobBackend) next.**
+- **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped; Phase 6b (session_digest writer) next.**
   - Phase 1 (commit `f900ba1`): `BlobStore` async client in `src/entraclaw/storage/blob.py` (put/get/list/delete/exists + ETag concurrency + 401→TokenExpiredError). 22 tests.
   - Phase 2: `MemoryBackend` protocol in `src/entraclaw/storage/backend.py` with `LocalBackend` + `BlobBackend` + `get_backend()` factory. `interaction_log.py` and `daily_summary.py` route through it. 22 tests.
   - Phase 5: `acquire_agent_user_storage_token` (parallel third hop for `https://storage.azure.com/.default`), `scripts/provision_blob_storage.py` (idempotent resource group + storage account + container + RBAC scoped to Agent User), `grant_agent_user_storage_consent` added to `create_entra_agent_ids.py` (grants `user_impersonation` on Azure Storage SP), `setup.sh --keep-memory-local` flag + Step 7b provisioning + migration prompt (idempotent, source-preserving), `src/entraclaw/storage/migration.py`. 23 tests. Setup now exits red + non-zero on migration failure.
-  - Phase 3 (next): `CachedBlobBackend` — write-through cache with local fallback for read when offline.
+  - Phase 6a: `PersonaBackend` in `src/entraclaw/storage/persona.py` (scoped to `claude_memory/` prefix, pull_all/push_all/push_one). `scripts/claude_memory_sync.py` CLI (`pull`/`push`/`push-one`). `migrate_local_to_backend` signature extended to accept `list[(source, prefix)]` pairs — setup.sh Step 7b now migrates agent data + Claude Code per-project auto-memory in one idempotent pass. `.claude/settings.json` adds SessionStart (pull) + PostToolUse Write (push-one) hooks, both gated on `ENTRACLAW_PERSONA_SYNC=on`. `/refresh-persona` skill added as a manual safety valve. +28 tests (449 total).
+  - Phase 6b (next): `/digest-session` skill + `session_digest_<date>.md` writer.
 - Multi-tenant lightweight chat — **landed to main** (commit `c8ec521`, PR #23369 abandoned-as-merged-externally). Spec: `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md`.
+
+## Memory types
+
+Two memory systems coexist in this project:
+
+1. **Agent operational memory** (blob prefix ``) — interaction log, daily summaries, watched-chats list, email cursor. Written by the EntraClaw MCP server (`src/entraclaw/tools/interaction_log.py` et al.). Read on demand.
+2. **Claude Code persona memory** (blob prefix `claude_memory/`) — the per-project auto-memory directory at `~/.claude/projects/<slug>/memory/`. Four existing types today:
+   - `user_*.md` — about a specific person
+   - `feedback_*.md` — register / behavioral corrections the user has given
+   - `project_*.md` — this project's own moving parts
+   - `reference_*.md` — durable facts that don't fit the above
+   Phase 6c will add `session_digest_*.md`, `relationship_*.md`, `voice_calibration.md`, `running_commitments.md`, and a few more (see `docs/plans/persona-persistence.md`).
+
+Sync is bi-directional when `ENTRACLAW_PERSONA_SYNC=on`: SessionStart hook pulls the latest, PostToolUse hook pushes any memory file Claude Code writes. Feature flag default is off — flip it per-session or per-shell to opt in.
 
 ## Read These First
 
@@ -48,7 +63,7 @@
 - `prompts/agent_system.md` (agent behavioral rules — channel discipline, watch-only, reply detection)
 - `docs/architecture/DESIGN-teams-bot-gateway.md` (Bot Gateway design)
 - `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` (delegated mode spec — multi-tenant chat, now landed)
-- `docs/engineering-status.md` (current state: 442 tests, 3 auth modes, Phase 1-3 daily-summary stack live, ADR-005 Phases 1/2/5 live)
+- `docs/engineering-status.md` (current state: 449 tests, 3 auth modes, Phase 1-3 daily-summary stack live, ADR-005 Phases 1/2/5/6a live)
 - `docs/index.md`
 - `docs/runbooks/hard-won-learnings.md` (read before making changes — covers stdout-capture-into-env, lazy-init dead poll, schema-divergence killing MCP stream, et al.)
 - `docs/decisions/001-obo-flows-for-device-agents.md`
