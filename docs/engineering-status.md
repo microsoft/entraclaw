@@ -9,6 +9,7 @@
 ## What's New Since Apr 17
 
 - **Persona-sati integration (mind-body split)** — system prompt (`prompts/agent_system.md`) archived, replaced with generic tool-description string. Memory sync hooks (`SessionStart` pull, `PostToolUse(Write)` push) removed from `.claude/settings.json`. Personality, behavioral rules, and memory now served by persona-sati MCP server. `.mcp.json.example` added for dual-server configuration. `scripts/claude_memory_sync.py` retained as manual migration tool. See `docs/architecture/DESIGN-persona-sati-integration.md`.
+- **setup.sh --new + --use-blueprint** — three explicit identity modes: `--new --with-upn-suffix=NAME` creates fresh Blueprint + Agent Identity + Agent User chain (tested: created `entraclaw-agent-sati-agent@werner.ac` separate from production bot). `--use-blueprint=APP_ID` attaches to existing Blueprint with new cert. No default mode — script errors if neither specified. Backs up `.entraclaw-state.json` before clearing for --new.
 
 ## What's New Since Apr 10
 
