@@ -30,6 +30,15 @@ dev = [
     "respx>=0.22.0",
     "azure-identity>=1.15.0",
 ]
+provisioning = [
+    "azure-identity>=1.15.0",
+    "requests>=2.31",
+    # keyring + cryptography power the cert-auth path for the Provisioner
+    # app. Zero shared secrets: the private key lives in macOS Keychain,
+    # the public cert is registered on the app reg in Entra.
+    "keyring>=24",
+    "cryptography>=42",
+]
 
 [tool.ruff]
 target-version = "py312"
