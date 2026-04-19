@@ -2,12 +2,19 @@
 """
 Shared helpers for Entra Graph provisioning.
 
-Centralizes the dedicated provisioner app registration used for Agent Identity
-Blueprint and Agent Identity creation via the Graph beta API.
+Centralizes the dedicated "EntraClaw Agent ID Provisioner" app registration
+used for Agent Identity Blueprint and Agent Identity creation via the
+Graph beta API.
 
-Pattern borrowed from agent-foundry-poc — the provisioner is a dedicated app with
-client_credentials flow, because Azure CLI tokens include Directory.AccessAsUser.All
-which the Agent Identity APIs explicitly reject (hard 403).
+Pattern borrowed from agent-foundry-poc — the provisioner is a dedicated app
+with client_credentials flow, because Azure CLI tokens include
+Directory.AccessAsUser.All which the Agent Identity APIs explicitly reject
+(hard 403).
+
+The Provisioner authenticates via an X.509 cert whose private key lives
+in macOS Keychain (via `keyring`). The public cert is registered on the
+app registration in Entra. No client_secret anywhere on disk. Matches the
+Blueprint-cert pattern already used for agent-body auth (ADR-003).
 
 Usage:
     # As a library (from create_entra_agent_ids.py):
@@ -17,11 +24,16 @@ Usage:
     python3 scripts/entra_provisioning.py
 """
 
+from __future__ import annotations
+
+import contextlib
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 MS_GRAPH_API_ID = "00000003-0000-0000-c000-000000000000"
@@ -49,7 +61,171 @@ class ProvisionerBootstrapError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# State persistence (replaces azd env for entraclaw)
+# Cert-auth secret storage — KEYCHAIN ONLY, never on disk
+# ---------------------------------------------------------------------------
+# CLAUDE.md non-negotiable: "Never write secrets to logs or memory files".
+# The Provisioner app is authenticated via an X.509 cert whose private
+# key lives in macOS Keychain (via `keyring`). The public cert is
+# registered on the app registration in Entra. No client_secret
+# anywhere. Matches the Blueprint-cert pattern already used for agent-
+# body auth.
+_KEYCHAIN_SERVICE_CERT = "entraclaw-provisioner-cert"
+
+
+def _keyring_module():
+    """Import keyring lazily so missing dep produces a clear error."""
+    try:
+        import keyring as _kr
+        return _kr
+    except ImportError as exc:
+        raise ProvisionerBootstrapError(
+            "keyring is required for cert-auth. Install with: "
+            "pip install -e '.[provisioning]'"
+        ) from exc
+
+
+def _keychain_get_cert(account: str) -> str | None:
+    """Return the PEM (cert+key) bundle from Keychain, or None if absent."""
+    kr = _keyring_module()
+    return kr.get_password(_KEYCHAIN_SERVICE_CERT, account)
+
+
+def _keychain_store_cert(account: str, pem_bundle: str) -> None:
+    """Store the PEM (cert+key) bundle in Keychain — overwrites if present."""
+    kr = _keyring_module()
+    kr.set_password(_KEYCHAIN_SERVICE_CERT, account, pem_bundle)
+
+
+def _keychain_delete_cert(account: str) -> None:
+    """Remove the Keychain entry. No-op if absent."""
+    kr = _keyring_module()
+    with contextlib.suppress(kr.errors.PasswordDeleteError):
+        kr.delete_password(_KEYCHAIN_SERVICE_CERT, account)
+
+
+def _generate_provisioner_cert() -> tuple[str, str, str]:
+    """Generate a fresh self-signed cert for Provisioner auth.
+
+    Returns (cert_pem, key_pem, thumbprint_hex). The PEMs are strings
+    (UTF-8); thumbprint is lowercase hex (matches Entra's
+    ``customKeyIdentifier`` / ``keyId`` representation).
+
+    Private material is returned as strings in memory — caller must
+    store it in Keychain, never to disk.
+    """
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+    except ImportError as exc:
+        raise ProvisionerBootstrapError(
+            "cryptography is required for cert-auth. Install with: "
+            "pip install -e '.[provisioning]'"
+        ) from exc
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, "entraclaw-provisioner"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "EntraClaw"),
+    ])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(UTC))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=365))
+        .sign(key, hashes.SHA256())
+    )
+    cert_pem = cert.public_bytes(encoding=serialization.Encoding.PEM).decode()
+    key_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    thumbprint = cert.fingerprint(hashes.SHA1()).hex()
+    return cert_pem, key_pem, thumbprint
+
+
+def _upload_cert_to_app(app_id: str, cert_pem: str) -> None:
+    """Register a public cert on the Provisioner app via az CLI.
+
+    Uses ``--append`` for idempotent multi-cert support (matches the
+    Blueprint pattern). The public cert is written to a mktemp'd file
+    only for the duration of the az CLI call; private key is NEVER
+    touched.
+    """
+    with tempfile.NamedTemporaryFile(
+        suffix=".crt", mode="w", delete=False
+    ) as tf:
+        tf.write(cert_pem)
+        cert_path = tf.name
+    try:
+        rc, out, err = run_az([
+            "ad", "app", "credential", "reset",
+            "--id", app_id,
+            "--cert", f"@{cert_path}",
+            "--append",
+            "-o", "json",
+        ])
+        if rc != 0:
+            raise ProvisionerBootstrapError(
+                err or "failed to upload cert to Provisioner app"
+            )
+        # az prints a JSON blob on success; we just care that rc == 0
+        _ = out
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(cert_path)
+
+
+def _remove_legacy_password_credentials(app_id: str) -> int:
+    """Delete any password credentials from the Provisioner app.
+
+    Returns the count of credentials deleted. Used during migration
+    from the secret-auth era — once cert-auth is in place, a lingering
+    password credential is a usable backdoor and MUST be removed.
+
+    ``az ad app credential delete`` without ``--cert`` targets password
+    credentials; with ``--cert`` it targets key credentials. We only
+    delete passwords here.
+    """
+    rc, out, err = run_az([
+        "ad", "app", "show",
+        "--id", app_id,
+        "--query", "passwordCredentials[].keyId",
+        "-o", "json",
+    ])
+    if rc != 0:
+        raise ProvisionerBootstrapError(
+            err or "could not list Provisioner password credentials"
+        )
+    try:
+        key_ids = json.loads(out) if out else []
+    except json.JSONDecodeError as exc:
+        raise ProvisionerBootstrapError(
+            f"failed to parse passwordCredentials list: {exc}"
+        ) from exc
+
+    removed = 0
+    for key_id in key_ids:
+        rc, _, err = run_az([
+            "ad", "app", "credential", "delete",
+            "--id", app_id,
+            "--key-id", key_id,
+        ])
+        if rc != 0:
+            raise ProvisionerBootstrapError(
+                err or f"failed to delete password credential {key_id}"
+            )
+        removed += 1
+    return removed
+
+
+# ---------------------------------------------------------------------------
+# State persistence
 # ---------------------------------------------------------------------------
 
 _STATE_FILE = Path(__file__).resolve().parent.parent / ".entraclaw-state.json"
@@ -70,19 +246,19 @@ def _save_state(state: dict) -> None:
 
 
 def get_state(key: str) -> str | None:
-    """Read a value from the local provision state file."""
+    """Read a value from .entraclaw-state.json."""
     return _load_state().get(key)
 
 
 def set_state(key: str, value: str) -> None:
-    """Write a value to the local provision state file."""
+    """Write a value to .entraclaw-state.json."""
     state = _load_state()
     state[key] = value
     _save_state(state)
 
 
 def clear_state(key: str) -> None:
-    """Remove a key from the local provision state file."""
+    """Remove a key from .entraclaw-state.json."""
     state = _load_state()
     state.pop(key, None)
     _save_state(state)
@@ -95,13 +271,15 @@ def clear_state(key: str) -> None:
 
 def run_az(args: list[str], capture: bool = True) -> tuple[int, str, str]:
     """Run an az CLI command, return (returncode, stdout, stderr)."""
-    result = subprocess.run(["az"] + args, capture_output=capture, text=True)
+    result = subprocess.run(["az", *args], capture_output=capture, text=True)
     return result.returncode, result.stdout.strip(), result.stderr.strip()
 
 
 def get_signed_in_user_id() -> str | None:
     """Get the object ID of the currently signed-in Azure CLI user."""
-    rc, out, _ = run_az(["ad", "signed-in-user", "show", "--query", "id", "-o", "tsv"])
+    rc, out, _ = run_az(
+        ["ad", "signed-in-user", "show", "--query", "id", "-o", "tsv"]
+    )
     if rc == 0 and out:
         return out
     return None
@@ -128,11 +306,15 @@ def _load_graph_app_roles() -> list[dict]:
         "-o", "json",
     ])
     if rc != 0 or not out:
-        raise ProvisionerBootstrapError(err or "could not query Microsoft Graph app roles")
+        raise ProvisionerBootstrapError(
+            err or "could not query Microsoft Graph app roles"
+        )
     try:
         return json.loads(out)
     except json.JSONDecodeError as exc:
-        raise ProvisionerBootstrapError(f"failed to parse Graph role list: {exc}") from exc
+        raise ProvisionerBootstrapError(
+            f"failed to parse Graph role list: {exc}"
+        ) from exc
 
 
 def resolve_graph_permissions() -> dict[str, str]:
@@ -207,7 +389,9 @@ def _get_existing_permission_role_ids(client_id: str) -> set[str]:
     try:
         data = json.loads(out)
     except json.JSONDecodeError as exc:
-        raise ProvisionerBootstrapError(f"failed to parse existing app permissions: {exc}") from exc
+        raise ProvisionerBootstrapError(
+            f"failed to parse existing app permissions: {exc}"
+        ) from exc
     return {item for item in data if item}
 
 
@@ -245,7 +429,10 @@ def _ensure_permissions_and_consent(client_id: str, required_values: list[str]) 
         spec for _, spec in permission_specs
         if spec.split("=", 1)[0] not in existing_role_ids
     ]
-    print(f"  Ensuring {len(permission_specs)} Graph application permissions on provisioner app...")
+    print(
+        f"  Ensuring {len(permission_specs)} Graph application "
+        f"permissions on provisioner app..."
+    )
 
     if missing_specs:
         cmd = [
@@ -253,7 +440,8 @@ def _ensure_permissions_and_consent(client_id: str, required_values: list[str]) 
             "--id", client_id,
             "--api", MS_GRAPH_API_ID,
             "--api-permissions",
-        ] + missing_specs
+            *missing_specs,
+        ]
         rc, _, err = run_az(cmd)
         if rc != 0 and "already exists" not in err.lower():
             lowered = err.lower()
@@ -294,15 +482,20 @@ def ensure_app_registration(
     required_values: list[str],
     wait_for_propagation: bool = True,
 ) -> tuple[str, str, str]:
-    """Ensure the dedicated provisioner app exists with correct permissions.
+    """Ensure the dedicated provisioner app exists with cert-auth.
 
-    Returns (client_id, client_secret, tenant_id).
-    Uses state file for persistence across runs.
+    Returns (client_id, pem_bundle, tenant_id) where ``pem_bundle`` is
+    the PEM-encoded cert+private-key (cert-auth material).
+
+    The private key ONLY exists in macOS Keychain; ``pem_bundle`` in
+    memory is transient — callers must not write it to disk. State
+    file tracks only non-secret identifiers (app id, thumbprint).
     """
-    # Resolve tenant ID
     tenant_id = os.environ.get("ENTRACLAW_TENANT_ID") or get_state("TENANT_ID")
     if not tenant_id:
-        rc, out, err = run_az(["account", "show", "--query", "tenantId", "-o", "tsv"])
+        rc, out, err = run_az(
+            ["account", "show", "--query", "tenantId", "-o", "tsv"]
+        )
         if rc != 0 or not out:
             raise ProvisionerBootstrapError(
                 err or "cannot determine tenant ID; run 'az login' first"
@@ -310,19 +503,30 @@ def ensure_app_registration(
         tenant_id = out
         set_state("TENANT_ID", tenant_id)
 
-    # Check for cached provisioner credentials
-    client_id = get_state("PROVISIONER_CLIENT_ID")
-    client_secret = get_state("PROVISIONER_CLIENT_SECRET")
+    # SECURITY: legacy migration path — if a prior (secret-auth) run
+    # left PROVISIONER_CLIENT_SECRET in the state file, we purge it
+    # BEFORE the cert-auth flow starts. This guarantees the state
+    # file never carries a secret forward.
+    if get_state("PROVISIONER_CLIENT_SECRET"):
+        print(
+            "  WARNING: legacy PROVISIONER_CLIENT_SECRET found in state file. "
+            "Cert-auth supersedes secret-auth; purging the secret from disk."
+        )
+        clear_state("PROVISIONER_CLIENT_SECRET")
 
-    # Validate cached app still exists
+    client_id = get_state("PROVISIONER_CLIENT_ID")
+    pem_bundle = _keychain_get_cert(tenant_id)
+
+    # Stale-app detection
     if client_id and not _application_exists(client_id):
         print(f"  Cached provisioner app is stale: {client_id}")
         client_id = None
-        client_secret = None
+        pem_bundle = None
         clear_state("PROVISIONER_CLIENT_ID")
-        clear_state("PROVISIONER_CLIENT_SECRET")
+        clear_state("PROVISIONER_CERT_THUMBPRINT")
+        _keychain_delete_cert(tenant_id)
 
-    # Find or create provisioner app
+    # Find-or-create the Provisioner app registration
     if not client_id:
         rc, out, _ = run_az([
             "ad", "app", "list",
@@ -335,7 +539,7 @@ def ensure_app_registration(
             print(f"  Found existing provisioner app: {client_id}")
             set_state("PROVISIONER_CLIENT_ID", client_id)
         else:
-            print("  Creating dedicated Entra provisioner app registration...")
+            print("  Creating dedicated EntraClaw provisioner app...")
             rc, out, err = run_az([
                 "ad", "app", "create",
                 "--display-name", PROVISIONER_APP_DISPLAY_NAME,
@@ -357,73 +561,74 @@ def ensure_app_registration(
             print(f"  Created provisioner app: {client_id}")
             set_state("PROVISIONER_CLIENT_ID", client_id)
 
-    # Ensure permissions and admin consent
     _ensure_permissions_and_consent(client_id, required_values)
 
-    # Create secret only if not cached
-    if not client_secret:
-        print("  Creating provisioner app client secret...")
-        rc, out, err = run_az([
-            "ad", "app", "credential", "reset",
-            "--id", client_id,
-            "--append",
-            "--years", "1",
-            "-o", "json",
-        ])
-        if rc != 0 or not out:
-            lowered = (err or "").lower()
-            if any(
-                term in lowered
-                for term in ["insufficient", "authorization", "privilege", "permission"]
-            ):
-                _print_admin_required("create a client secret on the provisioner app", err)
-            raise ProvisionerBootstrapError(err or "client secret creation failed")
-        try:
-            secret_data = json.loads(out)
-            client_secret = secret_data["password"]
-        except (json.JSONDecodeError, KeyError) as exc:
-            raise ProvisionerBootstrapError(
-                f"failed to extract secret from credential reset output: {exc}"
-            ) from exc
-        set_state("PROVISIONER_CLIENT_SECRET", client_secret)
-        print("  Stored provisioner app secret in state file")
+    # SECURITY: any leftover password credentials on the app are a
+    # backdoor — remove them unconditionally. This closes the window
+    # opened by the secret-auth era.
+    try:
+        removed = _remove_legacy_password_credentials(client_id)
+        if removed:
+            print(
+                f"  Removed {removed} legacy password credential(s) from "
+                f"Provisioner app (cert-auth only from here on)."
+            )
+    except ProvisionerBootstrapError as exc:
+        print(f"  WARN: could not enumerate/delete legacy password creds: {exc}")
+
+    # Cert-auth path: generate + upload + Keychain-store if absent
+    if not pem_bundle:
+        print("  Generating cert for Provisioner (RSA 2048, 365 days)...")
+        cert_pem, key_pem, thumbprint = _generate_provisioner_cert()
+        print(f"  Uploading public cert to app (SHA-1 thumb: {thumbprint})...")
+        _upload_cert_to_app(client_id, cert_pem)
+        pem_bundle = cert_pem + key_pem
+        _keychain_store_cert(tenant_id, pem_bundle)
+        set_state("PROVISIONER_CERT_THUMBPRINT", thumbprint)
+        print(
+            f"  Cert private key stored in macOS Keychain "
+            f"(service='{_KEYCHAIN_SERVICE_CERT}', account='{tenant_id}')."
+        )
     else:
-        print("  Using cached provisioner app secret")
+        thumbprint = get_state("PROVISIONER_CERT_THUMBPRINT") or "(unknown)"
+        print(f"  Using existing Provisioner cert (thumb: {thumbprint})")
 
     if wait_for_propagation:
         print("  Waiting 30s for Graph permission propagation...")
         time.sleep(30)
 
-    return client_id, client_secret, tenant_id
+    return client_id, pem_bundle, tenant_id
 
 
 def get_graph_token(
     required_values: list[str] | None = None,
     wait_for_propagation: bool = True,
 ) -> str:
-    """Get a Graph API access token via the dedicated provisioner app.
+    """Get a Graph API access token via the Provisioner app's cert.
 
-    Auto-creates the provisioner app registration if needed.
+    Uses ``CertificateCredential`` — private key comes from Keychain,
+    never from disk. Auto-provisions the app + cert on first run.
     """
     if required_values is None:
         required_values = build_required_permission_values()
 
-    client_id, client_secret, tenant_id = ensure_app_registration(
+    client_id, pem_bundle, tenant_id = ensure_app_registration(
         required_values,
         wait_for_propagation=wait_for_propagation,
     )
 
     try:
-        from azure.identity import ClientSecretCredential
+        from azure.identity import CertificateCredential
     except ImportError as exc:
         raise ProvisionerBootstrapError(
-            "azure-identity is required. Install with: pip install azure-identity"
+            "azure-identity is required. Install with: "
+            "pip install -e '.[provisioning]'"
         ) from exc
 
-    credential = ClientSecretCredential(
+    credential = CertificateCredential(
         tenant_id=tenant_id,
         client_id=client_id,
-        client_secret=client_secret,
+        certificate_data=pem_bundle.encode(),
     )
     return credential.get_token("https://graph.microsoft.com/.default").token
 

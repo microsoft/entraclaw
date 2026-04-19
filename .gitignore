@@ -18,6 +18,7 @@ venv/
 .pyright/
 .openclaw-state.json
 .entraclaw-state.json
+.entraclaw-state.json.bak.*
 .mcp.json
 .coverage
 entraclaw-state-export.tar.gz.enc
