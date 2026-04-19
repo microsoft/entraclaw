@@ -322,33 +322,14 @@ if [ "$NEW_CHAIN" = true ] && [ -n "$USE_BLUEPRINT" ]; then
 fi
 
 if [ "$NEW_CHAIN" = false ] && [ -z "$USE_BLUEPRINT" ]; then
-    # Check if state file has existing identity — if so, reuse silently (backwards compat)
-    STATE_FILE="$PROJECT_ROOT/.entraclaw-state.json"
-    if [ -f "$STATE_FILE" ]; then
-        EXISTING_BP=$("$SCRIPT_PYTHON" -c "
-import json, pathlib
-sf = pathlib.Path('$STATE_FILE')
-data = json.loads(sf.read_text()) if sf.is_file() else {}
-print(data.get('BLUEPRINT_APP_ID', ''))
-" 2>/dev/null || echo "")
-        if [ -n "$EXISTING_BP" ]; then
-            echo -e "  ${GREEN}Reusing existing identity from state file${NC}"
-            echo "    Blueprint: ${EXISTING_BP}"
-            echo "    (use --new for a fresh chain, or --use-blueprint=ID to attach to a different one)"
-            USE_BLUEPRINT="$EXISTING_BP"
-        fi
-    fi
-
-    if [ -z "$USE_BLUEPRINT" ]; then
-        echo ""
-        echo "ERROR: No identity mode specified." >&2
-        echo "" >&2
-        echo "  Choose one:" >&2
-        echo "    --new --with-upn-suffix=NAME    Create a fresh identity chain" >&2
-        echo "    --use-blueprint=APP_ID          Attach to an existing Blueprint" >&2
-        echo "" >&2
-        exit 1
-    fi
+    echo ""
+    echo "ERROR: No identity mode specified." >&2
+    echo "" >&2
+    echo "  Choose one:" >&2
+    echo "    --new --with-upn-suffix=NAME    Create a fresh identity chain" >&2
+    echo "    --use-blueprint=APP_ID          Attach to an existing Blueprint" >&2
+    echo "" >&2
+    exit 1
 fi
 
 # ── Handle --use-blueprint: reuse existing identity, add cert for this machine ─
