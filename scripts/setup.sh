@@ -25,6 +25,7 @@ SWITCH_USER=false
 TEAMS_USER_EMAIL=""
 SHOW_HELP=false
 KEEP_MEMORY_LOCAL=false
+NEW_CHAIN=false
 
 for arg in "$@"; do
     case $arg in
@@ -36,6 +37,9 @@ for arg in "$@"; do
             ;;
         --keep-memory-local)
             KEEP_MEMORY_LOCAL=true
+            ;;
+        --new)
+            NEW_CHAIN=true
             ;;
         --help|-h)
             SHOW_HELP=true
@@ -51,6 +55,10 @@ if [ "$SHOW_HELP" = true ]; then
     echo "Usage: ./scripts/setup.sh [OPTIONS]"
     echo ""
     echo "Options:"
+    echo "  --new                  Create a completely new Agent Identity chain."
+    echo "                         Backs up existing state and provisions fresh:"
+    echo "                         new Blueprint, new Agent Identity, new Agent User."
+    echo "                         The existing chain is NOT affected."
     echo "  --switch-user          Sign in as a different user before setup."
     echo "                         The new user becomes the agent's owner and sponsor."
     echo "  --teams-user=EMAIL     Set a different user as the Teams chat recipient."
@@ -286,6 +294,29 @@ fi
 
 "$SCRIPT_PYTHON" -m pip install --quiet azure-identity requests 2>&1 | tail -1 || true
 success "azure-identity and requests available"
+
+# ── Handle --new: back up state, force fresh identity chain ───────────────
+if [ "$NEW_CHAIN" = true ]; then
+    STATE_FILE="$PROJECT_ROOT/.entraclaw-state.json"
+    if [ -f "$STATE_FILE" ]; then
+        BACKUP="$STATE_FILE.bak.$(date +%Y%m%d-%H%M%S)"
+        cp "$STATE_FILE" "$BACKUP"
+        echo -e "  ${YELLOW}--new: backed up state to $(basename "$BACKUP")${NC}"
+        # Clear identity keys but keep the provisioner app (it can be reused)
+        "$SCRIPT_PYTHON" -c "
+import json, pathlib
+sf = pathlib.Path('$STATE_FILE')
+data = json.loads(sf.read_text()) if sf.is_file() else {}
+# Keep provisioner app — it's a helper, not part of the agent identity
+keep = {k: v for k, v in data.items() if k.startswith('PROVISIONER')}
+sf.write_text(json.dumps(keep, indent=2))
+print('  Cleared identity state (kept provisioner app)')
+"
+    fi
+    # Tell create_entra_agent_ids.py to skip display-name lookups
+    export ENTRACLAW_NEW_CHAIN=1
+    echo -e "  ${YELLOW}--new: will create fresh Blueprint + Agent Identity + Agent User${NC}"
+fi
 
 # ════════════════════════════════════════════════════════════════════════════
 # Step 4: Bootstrap provisioner app (Python)

@@ -18,12 +18,17 @@ Prerequisites:
     - pip install azure-identity requests
 """
 
+import os
 import platform
 import socket
 import sys
 import time
 
 import requests
+
+# When ENTRACLAW_NEW_CHAIN=1, skip all find_existing_* lookups and create fresh.
+# Set by setup.sh --new to force a new identity chain.
+_FORCE_NEW = os.environ.get("ENTRACLAW_NEW_CHAIN") == "1"
 
 # entra_provisioning.py lives in the same directory
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
@@ -154,7 +159,11 @@ def create_blueprint(token: str) -> tuple[str, str]:
     """Create or find the Agent Identity Blueprint. Returns (app_id, object_id)."""
     print("\n--- Creating Agent Identity Blueprint ---\n")
 
-    existing = find_existing_blueprint(token)
+    if _FORCE_NEW:
+        print("  [--new] Skipping existing Blueprint lookup — creating fresh")
+        existing = None
+    else:
+        existing = find_existing_blueprint(token)
     if existing:
         app_id = existing["appId"]
         obj_id = existing["id"]
@@ -254,7 +263,11 @@ def create_agent_identity(token: str, blueprint_app_id: str) -> tuple[str, str]:
     display_name = _agent_display_name()
     stored_app_id = get_state("AGENT_ID")
 
-    existing = find_existing_agent_identity(token, display_name, stored_app_id=stored_app_id)
+    if _FORCE_NEW:
+        print(f"  [--new] Skipping existing Agent Identity lookup — creating fresh")
+        existing = None
+    else:
+        existing = find_existing_agent_identity(token, display_name, stored_app_id=stored_app_id)
     if existing:
         agent_id = existing.get("appId", "")
         agent_obj_id = existing.get("id", "")
@@ -342,14 +355,17 @@ def _agent_user_upn(token: str) -> str:
         domains = resp.json().get("value", [])
         # Prefer custom domain (not .onmicrosoft.com)
         custom = [d["id"] for d in domains if d.get("isVerified") and ".onmicrosoft.com" not in d["id"]]
+        # When --new, add a unique suffix to avoid UPN collision
+        upn_suffix = os.environ.get("_ENTRACLAW_UPN_SUFFIX", "")
+        agent_name = f"entraclaw-agent-{upn_suffix}" if upn_suffix else "entraclaw-agent"
         if custom:
             print(f"  Using custom verified domain: {custom[0]}")
-            return f"entraclaw-agent@{custom[0]}"
+            return f"{agent_name}@{custom[0]}"
         # Fall back to default domain (including .onmicrosoft.com)
         default = [d["id"] for d in domains if d.get("isDefault")]
         if default:
             print(f"  Using default domain: {default[0]}")
-            return f"entraclaw-agent@{default[0]}"
+            return f"{agent_name}@{default[0]}"
 
     # Last resort
     print("  WARNING: Could not determine verified domain for Agent User UPN")
@@ -443,7 +459,11 @@ def create_agent_user(
     """Create or find the Agent User. Returns (user_object_id, user_upn)."""
     print("\n--- Creating Agent User ---\n")
 
-    existing = find_existing_agent_user(token, agent_identity_obj_id)
+    if _FORCE_NEW:
+        print("  [--new] Skipping existing Agent User lookup — creating fresh")
+        existing = None
+    else:
+        existing = find_existing_agent_user(token, agent_identity_obj_id)
     if existing:
         user_id = existing.get("id", "")
         upn = existing.get("userPrincipalName", "")
@@ -453,12 +473,15 @@ def create_agent_user(
         return user_id, upn
 
     upn = _agent_user_upn(token)
+    upn_suffix = os.environ.get("_ENTRACLAW_UPN_SUFFIX", "")
+    mail_nick = f"entraclaw-agent-{upn_suffix}" if upn_suffix else "entraclaw-agent"
+    display = f"EntraClaw Agent ({upn_suffix})" if upn_suffix else "EntraClaw Agent"
     body = {
         "@odata.type": "microsoft.graph.agentUser",
-        "displayName": "EntraClaw Agent",
+        "displayName": display,
         "userPrincipalName": upn,
         "identityParentId": agent_identity_obj_id,
-        "mailNickname": "entraclaw-agent",
+        "mailNickname": mail_nick,
         "accountEnabled": True,
     }
 
@@ -923,8 +946,19 @@ def main() -> int:
     # machine, or a state-file loss), reuse the Agent User + its parent
     # Agent Identity rather than creating duplicates that would then
     # collide on the unique-UPN constraint.
-    intended_upn = _agent_user_upn(token)
-    existing_user = find_existing_agent_user_by_upn(token, intended_upn)
+    #
+    # When _FORCE_NEW (setup.sh --new), skip this check entirely and use a
+    # unique UPN suffix so the new Agent User doesn't collide.
+    if _FORCE_NEW:
+        existing_user = None
+        # Generate a unique mailNickname/UPN to avoid collision
+        import hashlib
+        _suffix = hashlib.sha256(str(time.time()).encode()).hexdigest()[:6]
+        os.environ["_ENTRACLAW_UPN_SUFFIX"] = _suffix
+        print(f"  [--new] Will use UPN suffix: {_suffix}")
+    else:
+        intended_upn = _agent_user_upn(token)
+        existing_user = find_existing_agent_user_by_upn(token, intended_upn)
     if existing_user:
         agent_user_id = existing_user["id"]
         agent_user_upn = existing_user["userPrincipalName"]
