@@ -1248,3 +1248,83 @@ class TestInitPollNoDefaultChat:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
             mcp_server._identity = old_identity
+
+
+# ---------------------------------------------------------------------------
+# No default chat — the full kill
+# ---------------------------------------------------------------------------
+# The "default group chat" concept is dead: _initialize no longer calls
+# _init_chat, tools don't fall through to _state["chat_id"], and a missing
+# chat_id is an explicit error instead of a silent default.
+
+
+class TestNoDefaultChat:
+    def test_init_chat_symbol_is_gone(self) -> None:
+        """Prevent regressions: _init_chat should not exist on the module."""
+        import entraclaw.mcp_server as mod
+
+        assert not hasattr(mod, "_init_chat"), (
+            "_init_chat was removed — the default-chat concept is gone"
+        )
+
+    @pytest.mark.asyncio
+    async def test_initialize_does_not_touch_chat_id_state(
+        self, monkeypatch
+    ) -> None:
+        """A freshly initialized MCP server must have no _state["chat_id"]."""
+        from entraclaw import mcp_server
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.clear()
+
+            async def noop():
+                return None
+
+            with patch.object(
+                mcp_server, "_init_auth", new=AsyncMock(side_effect=noop)
+            ), patch.object(
+                mcp_server, "_init_poll", new=AsyncMock(side_effect=noop)
+            ):
+                await mcp_server._initialize()
+
+            assert "chat_id" not in mcp_server._state, (
+                "_initialize must not set a default chat_id"
+            )
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+
+    @pytest.mark.asyncio
+    async def test_send_teams_message_errors_without_chat_id(
+        self, monkeypatch
+    ) -> None:
+        """send_teams_message with no chat_id and no legacy default
+        must return an explicit error, not silently target nothing."""
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.clear()
+            # No chat_id in state, no config.mode == "bot".
+            fake_config = MagicMock()
+            fake_config.mode = "agent_user"
+            mcp_server._state["config"] = fake_config
+
+            with patch.object(
+                mcp_server,
+                "_initialize",
+                new=AsyncMock(return_value=None),
+            ):
+                result = await mcp_server.send_teams_message(
+                    message="hi", chat_id=""
+                )
+
+            parsed = _json.loads(result)
+            assert "error" in parsed
+            assert "chat_id" in parsed["error"].lower()
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
