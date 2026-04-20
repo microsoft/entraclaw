@@ -1450,6 +1450,13 @@ async def send_teams_message(
         },
     )
 
+    # Slave-mode disclosure: no channel push means the reply won't arrive
+    # in this host's turn. The model reads this and tells the user.
+    notice = _slave_disclosure_suffix()
+    if notice and isinstance(result, dict):
+        result = dict(result)
+        result["notice"] = notice
+
     return json.dumps(result, indent=2)
 
 

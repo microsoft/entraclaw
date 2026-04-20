@@ -243,3 +243,99 @@ class TestBackgroundTaskGating:
         assert len(created) >= 3, (
             f"leader mode must spawn background tasks; got {len(created)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# send_teams_message — slave-mode disclosure
+#
+# The semantic of send_teams_message is "fire-and-forget with a reply expected
+# asynchronously via the channel mechanism". In leader mode the channel push
+# delivers the reply into Claude Code's turn; in slave mode there is no
+# channel, so the tool response MUST tell the model to advise the user their
+# reply won't surface. The disclosure lives inside the JSON response so the
+# model sees it as tool output.
+# ---------------------------------------------------------------------------
+class TestSendTeamsMessageDisclosure:
+    @pytest.mark.asyncio
+    async def test_slave_send_teams_message_response_includes_disclosure(
+        self, monkeypatch
+    ) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: False)
+
+        # Bypass auth init and token ensure — we just care about the wrapper.
+        async def _noop():
+            return None
+
+        async def _fake_init():
+            mcp_server._state["initialized"] = True
+
+        async def _fake_with_retry(_fn, **kwargs):
+            return {"message_id": "abc", "sent_at": "2026-04-20T00:00:00Z"}
+
+        monkeypatch.setattr(mcp_server, "_initialize", _fake_init)
+        monkeypatch.setattr(mcp_server, "_ensure_valid_token", _noop)
+        monkeypatch.setattr(mcp_server, "_with_token_retry", _fake_with_retry)
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **_kw: None)
+
+        fake_config = MagicMock()
+        fake_config.mode = "agent_user"
+        monkeypatch.setitem(mcp_server._state, "config", fake_config)
+
+        fake_identity = MagicMock()
+        fake_identity.session.auth_mode = "agent_user"
+        monkeypatch.setattr(mcp_server, "_identity", fake_identity)
+
+        raw = await mcp_server.send_teams_message(
+            "hello", chat_id="19:abc@thread.v2"
+        )
+        payload = _json.loads(raw)
+
+        assert "notice" in payload, (
+            f"slave-mode response must include a 'notice' field: {payload}"
+        )
+        assert "Reply channel unavailable" in payload["notice"]
+
+    @pytest.mark.asyncio
+    async def test_leader_send_teams_message_response_excludes_disclosure(
+        self, monkeypatch
+    ) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: True)
+
+        async def _noop():
+            return None
+
+        async def _fake_init():
+            mcp_server._state["initialized"] = True
+
+        async def _fake_with_retry(_fn, **kwargs):
+            return {"message_id": "abc", "sent_at": "2026-04-20T00:00:00Z"}
+
+        monkeypatch.setattr(mcp_server, "_initialize", _fake_init)
+        monkeypatch.setattr(mcp_server, "_ensure_valid_token", _noop)
+        monkeypatch.setattr(mcp_server, "_with_token_retry", _fake_with_retry)
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **_kw: None)
+
+        fake_config = MagicMock()
+        fake_config.mode = "agent_user"
+        monkeypatch.setitem(mcp_server._state, "config", fake_config)
+
+        fake_identity = MagicMock()
+        fake_identity.session.auth_mode = "agent_user"
+        monkeypatch.setattr(mcp_server, "_identity", fake_identity)
+
+        raw = await mcp_server.send_teams_message(
+            "hello", chat_id="19:abc@thread.v2"
+        )
+        payload = _json.loads(raw)
+
+        assert "notice" not in payload, (
+            f"leader-mode response must NOT include a slave notice: {payload}"
+        )
