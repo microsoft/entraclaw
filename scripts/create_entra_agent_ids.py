@@ -228,9 +228,29 @@ def _agent_display_name() -> str:
 
 
 def find_existing_agent_identity(
-    token: str, display_name: str, stored_app_id: str | None = None
+    token: str,
+    display_name: str,
+    blueprint_app_id: str,
+    stored_app_id: str | None = None,
 ) -> dict | None:
-    """Find an existing Agent Identity by stored appId or display name."""
+    """Find an existing Agent Identity under ``blueprint_app_id``.
+
+    Agent Identity display names include the machine hostname
+    (``EntraClaw Agent - <host>``) — in a tenant that has multiple
+    EntraClaw Blueprints, multiple Agent Identity SPs will share the
+    same display name, each parented by a different Blueprint.
+
+    Graph does not support ``$filter=agentIdentityBlueprintId eq ...``
+    on service principals, so we filter the result set in Python. Any
+    candidate whose ``agentIdentityBlueprintId`` doesn't match our
+    target Blueprint is rejected — otherwise this function can cross-
+    contaminate state and point the agent at the wrong Blueprint's
+    identity, which is a latent source of "why is my three-hop flow
+    trying to use the old Blueprint?" bugs.
+
+    ``stored_app_id`` is still honoured as a fast path, but only when
+    the fetched SP is also scoped to ``blueprint_app_id``.
+    """
     if stored_app_id:
         resp = graph_request(
             "GET",
@@ -238,9 +258,14 @@ def find_existing_agent_identity(
             token,
         )
         if resp.status_code == 200:
-            values = resp.json().get("value", [])
-            if values:
-                return values[0]
+            for sp in resp.json().get("value", []):
+                if sp.get("agentIdentityBlueprintId") == blueprint_app_id:
+                    return sp
+            if resp.json().get("value"):
+                print(
+                    f"  [warn] stored AGENT_ID={stored_app_id} is parented by a "
+                    f"different Blueprint; ignoring and re-discovering."
+                )
 
     resp = graph_request(
         "GET",
@@ -251,7 +276,10 @@ def find_existing_agent_identity(
         return None
 
     for sp in resp.json().get("value", []):
-        if sp.get("displayName") == display_name:
+        if (
+            sp.get("displayName") == display_name
+            and sp.get("agentIdentityBlueprintId") == blueprint_app_id
+        ):
             return sp
     return None
 
@@ -267,7 +295,12 @@ def create_agent_identity(token: str, blueprint_app_id: str) -> tuple[str, str]:
         print("  [--new] Skipping existing Agent Identity lookup — creating fresh")
         existing = None
     else:
-        existing = find_existing_agent_identity(token, display_name, stored_app_id=stored_app_id)
+        existing = find_existing_agent_identity(
+            token,
+            display_name,
+            blueprint_app_id,
+            stored_app_id=stored_app_id,
+        )
     if existing:
         agent_id = existing.get("appId", "")
         agent_obj_id = existing.get("id", "")
@@ -397,13 +430,29 @@ def _resolve_sp_object_id_by_app_id(token: str, app_id: str) -> str | None:
 
 
 def find_existing_agent_user(token: str, agent_identity_obj_id: str) -> dict | None:
-    """Find an existing Agent User linked to the given Agent Identity."""
+    """Find an existing Agent User linked to the given Agent Identity.
+
+    The stored AGENT_USER_ID is only trusted if the fetched user's
+    ``identityParentId`` matches ``agent_identity_obj_id`` — otherwise
+    state from a previous Blueprint's chain can silently win and the
+    caller ends up pointing at a user parented by a different Agent
+    Identity. Seen in the wild on 2026-04-19 when a name-based lookup
+    elsewhere mis-assigned AGENT_ID across Blueprints; defense in
+    depth here keeps the damage from propagating.
+    """
     stored_user_id = get_state("AGENT_USER_ID")
     if stored_user_id:
         resp = graph_request("GET", f"/users/{stored_user_id}", token, retry=False)
         if resp.status_code == 200:
-            return resp.json()
-        print(f"  [warn] Stored AGENT_USER_ID not found: {stored_user_id}")
+            user = resp.json()
+            if user.get("identityParentId") == agent_identity_obj_id:
+                return user
+            print(
+                f"  [warn] stored AGENT_USER_ID={stored_user_id} is parented by a "
+                f"different Agent Identity; ignoring and re-discovering."
+            )
+        else:
+            print(f"  [warn] Stored AGENT_USER_ID not found: {stored_user_id}")
 
     # Search by identityParentId (the Agent Identity's object ID)
     resp = graph_request(
