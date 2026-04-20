@@ -710,6 +710,21 @@ async def read(
         out: list[dict] = []
         for m in messages:
             body_content = (m.get("body") or {}).get("content", "") or ""
+            # Surface Graph's ``attachments`` array so downstream tools
+            # (e.g. view_image) can resolve the hostedContents URL for
+            # UUID-tagged inline images. The body HTML only contains
+            # ``<attachment id="UUID">`` — the contentUrl lives here.
+            raw_attachments = m.get("attachments") or []
+            attachments = [
+                {
+                    "id": a.get("id"),
+                    "content_type": a.get("contentType"),
+                    "content_url": a.get("contentUrl"),
+                    "name": a.get("name"),
+                    "thumbnail_url": a.get("thumbnailUrl"),
+                }
+                for a in raw_attachments
+            ]
             out.append(
                 {
                     "message_id": m["id"],
@@ -719,6 +734,7 @@ async def read(
                     "content": body_content,
                     "sent_at": m.get("createdDateTime"),
                     "reply_to_ids": extract_reply_to_ids(body_content),
+                    "attachments": attachments,
                 }
             )
         return out

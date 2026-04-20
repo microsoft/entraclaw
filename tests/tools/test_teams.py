@@ -905,6 +905,76 @@ class TestTeamsRead:
         assert result[0]["reply_to_ids"] == ["1776393595644"]
         assert result[1]["reply_to_ids"] == []
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_attachments_surfaced_in_read_output(self) -> None:
+        """Graph's /chats/{id}/messages response carries an ``attachments``
+        array on every message. For image/file shares, the body HTML only
+        carries an opaque ``<attachment id="UUID">`` tag — the real
+        ``contentUrl`` (Graph hostedContents endpoint) lives on the
+        attachment object. read() must pass the attachments through
+        verbatim so downstream tools (view_image) can fetch them; without
+        this, inline images are unresolvable."""
+        respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": "img-1",
+                            "from": {"user": {"displayName": "Brandon"}},
+                            "body": {
+                                "content": (
+                                    '<p><attachment id="abc-uuid">'
+                                    "</attachment></p>"
+                                )
+                            },
+                            "createdDateTime": "2026-04-20T12:00:00Z",
+                            "attachments": [
+                                {
+                                    "id": "abc-uuid",
+                                    "contentType": "image/png",
+                                    "contentUrl": (
+                                        "https://graph.microsoft.com/v1.0/"
+                                        "chats/c1/messages/img-1/"
+                                        "hostedContents/abc-uuid/$value"
+                                    ),
+                                    "name": "screenshot.png",
+                                    "thumbnailUrl": None,
+                                }
+                            ],
+                        },
+                        {
+                            "id": "plain-1",
+                            "from": {"user": {"displayName": "Brandon"}},
+                            "body": {"content": "<p>just text</p>"},
+                            "createdDateTime": "2026-04-20T12:01:00Z",
+                        },
+                    ]
+                },
+            )
+        )
+        result = await read(chat_id="c1", token="tok")
+        assert len(result) == 2
+
+        # Attachment-bearing message surfaces the full metadata.
+        assert result[0]["attachments"] == [
+            {
+                "id": "abc-uuid",
+                "content_type": "image/png",
+                "content_url": (
+                    "https://graph.microsoft.com/v1.0/"
+                    "chats/c1/messages/img-1/"
+                    "hostedContents/abc-uuid/$value"
+                ),
+                "name": "screenshot.png",
+                "thumbnail_url": None,
+            }
+        ]
+
+        # Messages without attachments get an empty list (stable shape).
+        assert result[1]["attachments"] == []
+
 
 # ---------------------------------------------------------------------------
 # extract_reply_to_ids — the parser used by read()
