@@ -474,11 +474,10 @@ async def _init_poll() -> None:
     _state["seen_id_timestamps"] = {}
 
     # Watched chats: dict of chat_id -> {seen_ids: set, last_ts: str|None}
+    # Only chats the agent has explicitly registered (via create_chat or
+    # auto-discovery) are watched. There is no default group chat anymore —
+    # leftover _state["chat_id"] from _init_chat is intentionally ignored.
     _state["watched_chats"] = {}
-
-    # Register the default group chat
-    if _state.get("chat_id"):
-        _register_watched_chat(str(_state["chat_id"]), persist=False)
 
     # Load persisted watched chats (DMs created via create_chat tool)
     config = _state.get("config")
@@ -487,7 +486,7 @@ async def _init_poll() -> None:
         if watched_file.is_file():
             for line in watched_file.read_text().splitlines():
                 cid = line.strip()
-                if cid and cid != _state.get("chat_id"):
+                if cid:
                     _register_watched_chat(cid, persist=False)
                     if logger:
                         logger.info("Loaded persisted watched chat: %s", cid)
@@ -733,33 +732,48 @@ async def _background_poll() -> None:
             watched = dict(_state.get("watched_chats", {}))
 
             for chat_id, chat_state in watched.items():
-                # Bootstrap on first encounter
-                if not chat_state.get("bootstrapped"):
-                    await _bootstrap_chat(chat_id)
-                    continue
+                try:
+                    # Bootstrap on first encounter
+                    if not chat_state.get("bootstrapped"):
+                        await _bootstrap_chat(chat_id)
+                        continue
 
-                raw_messages = await _with_token_retry(
-                    read, chat_id=chat_id, count=10,
-                )
-                human_msgs = filter_human_messages(raw_messages, agent_display_name)
-                new_msgs = _filter_new_messages(
-                    human_msgs, chat_state["last_ts"], chat_state["seen_ids"],
-                )
+                    raw_messages = await _with_token_retry(
+                        read, chat_id=chat_id, count=10,
+                    )
+                    human_msgs = filter_human_messages(
+                        raw_messages, agent_display_name,
+                    )
+                    new_msgs = _filter_new_messages(
+                        human_msgs, chat_state["last_ts"], chat_state["seen_ids"],
+                    )
 
-                if new_msgs:
-                    newest = max(new_msgs, key=lambda m: m.get("sent_at", ""))
-                    chat_state["last_ts"] = newest["sent_at"]
-                    for m in new_msgs:
-                        chat_state["seen_ids"].add(m["message_id"])
+                    if new_msgs:
+                        newest = max(new_msgs, key=lambda m: m.get("sent_at", ""))
+                        chat_state["last_ts"] = newest["sent_at"]
+                        for m in new_msgs:
+                            chat_state["seen_ids"].add(m["message_id"])
 
-                    # Bounded cleanup (keep last 500)
-                    if len(chat_state["seen_ids"]) > SEEN_SET_MAX:
-                        chat_state["seen_ids"] = set(
-                            sorted(chat_state["seen_ids"])[-100:]
+                        # Bounded cleanup (keep last 500)
+                        if len(chat_state["seen_ids"]) > SEEN_SET_MAX:
+                            chat_state["seen_ids"] = set(
+                                sorted(chat_state["seen_ids"])[-100:]
+                            )
+
+                        for m in sorted(
+                            new_msgs, key=lambda m: m.get("sent_at", ""),
+                        ):
+                            await _push_channel_notification(m, chat_id=chat_id)
+                except Exception as chat_exc:
+                    # One chat's failure must not starve the others in this
+                    # cycle. Log and move on; the next cycle will retry.
+                    if logger:
+                        logger.warning(
+                            "Per-chat poll error (chat_id=%s): %s: %s",
+                            chat_id,
+                            type(chat_exc).__name__,
+                            chat_exc,
                         )
-
-                    for m in sorted(new_msgs, key=lambda m: m.get("sent_at", "")):
-                        await _push_channel_notification(m, chat_id=chat_id)
 
         except Exception as exc:
             if logger:

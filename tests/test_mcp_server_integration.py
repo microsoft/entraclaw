@@ -1093,3 +1093,158 @@ class TestPollTaskAutoStart:
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
+
+
+# ---------------------------------------------------------------------------
+# Per-chat resilience in _background_poll
+# ---------------------------------------------------------------------------
+# Historical bug: a single chat's Graph error (403 on a stale chat, transient
+# network blip) would bubble out of the per-chat body, abort the entire poll
+# cycle, and starve every chat later in iteration order. Fix: wrap the
+# per-chat body in its own try/except so one bad chat can't block the rest.
+
+
+class TestBackgroundPollPerChatResilience:
+    """One chat raising must not prevent the other chats in the same cycle
+    from being polled and pushing notifications."""
+
+    @pytest.mark.asyncio
+    async def test_one_chat_403_does_not_starve_others(
+        self, monkeypatch
+    ) -> None:
+        import asyncio as _asyncio
+
+        from entraclaw import mcp_server
+
+        bad_chat = "19:bad@thread.v2"
+        good_chat = "19:good@thread.v2"
+
+        good_msg = {
+            "message_id": "m1",
+            "from": "Brandon Werner",
+            "content": "<p>hi</p>",
+            "sent_at": "2026-04-20T01:00:00.000Z",
+        }
+
+        sm = MagicMock()
+        sm.state = mcp_server.IdentityState.AGENT_USER
+        sm.session.token = "tok"
+        sm.session.token_acquired_at = time.monotonic()
+
+        old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
+        try:
+            mcp_server._state.clear()
+            mcp_server._state["token"] = "tok"
+            mcp_server._state["watched_chats"] = {
+                bad_chat: {
+                    "seen_ids": set(),
+                    "last_ts": "2026-04-20T00:00:00.000Z",
+                    "bootstrapped": True,
+                },
+                good_chat: {
+                    "seen_ids": set(),
+                    "last_ts": "2026-04-20T00:00:00.000Z",
+                    "bootstrapped": True,
+                },
+            }
+            mcp_server._identity = sm
+
+            async def fake_read(token, chat_id, count):
+                if chat_id == bad_chat:
+                    raise httpx.HTTPStatusError(
+                        "403 Forbidden",
+                        request=httpx.Request("GET", "https://example"),
+                        response=httpx.Response(403),
+                    )
+                return [good_msg]
+
+            pushed: list = []
+
+            async def fake_push(msg, chat_id):
+                pushed.append((chat_id, msg["message_id"]))
+
+            async def no_refresh():
+                return None
+
+            # Cancel the loop after one cycle by raising on the second sleep.
+            call_count = {"n": 0}
+            real_sleep = _asyncio.sleep
+
+            async def fake_sleep(seconds):
+                call_count["n"] += 1
+                if call_count["n"] >= 2:
+                    raise _asyncio.CancelledError()
+                await real_sleep(0)
+
+            with (
+                patch(
+                    "entraclaw.tools.teams.read",
+                    new=AsyncMock(side_effect=fake_read),
+                ),
+                patch(
+                    "entraclaw.mcp_server._ensure_valid_token",
+                    new=AsyncMock(side_effect=no_refresh),
+                ),
+                patch(
+                    "entraclaw.mcp_server._push_channel_notification",
+                    new=AsyncMock(side_effect=fake_push),
+                ),
+                patch.object(_asyncio, "sleep", new=fake_sleep),
+                pytest.raises(_asyncio.CancelledError),
+            ):
+                await mcp_server._background_poll()
+
+            # The good chat must have pushed despite the bad chat's 403.
+            assert (good_chat, "m1") in pushed, (
+                "good chat must push even when bad chat throws"
+            )
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
+
+
+# ---------------------------------------------------------------------------
+# _init_poll — no default chat auto-registration
+# ---------------------------------------------------------------------------
+# Historical: _init_poll auto-registered _state["chat_id"] (the "default group
+# chat") as a watched chat. After the identity rework, a stale default chat
+# can 403 on every poll. The agent only watches chats it has in memory
+# (watched_chats file) — no automatic default.
+
+
+class TestInitPollNoDefaultChat:
+    @pytest.mark.asyncio
+    async def test_default_chat_id_is_not_auto_registered(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A _state["chat_id"] left over from _init_chat must NOT become a
+        watched chat. Only explicit entries in the watched_chats file count."""
+        from entraclaw import mcp_server
+
+        fake_config = MagicMock()
+        fake_config.data_dir = tmp_path
+        fake_config.mode = "agent_user"
+
+        old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
+        try:
+            mcp_server._state.clear()
+            mcp_server._state["config"] = fake_config
+            mcp_server._state["chat_id"] = "19:stale-default@thread.v2"
+            mcp_server._identity = None
+
+            loop = MagicMock()
+            loop.create_task.return_value = MagicMock(done=lambda: False)
+            with patch("asyncio.get_event_loop", return_value=loop):
+                await mcp_server._init_poll()
+
+            assert (
+                "19:stale-default@thread.v2"
+                not in mcp_server._state["watched_chats"]
+            ), "default chat_id must not be auto-registered"
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
