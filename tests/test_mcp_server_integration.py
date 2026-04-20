@@ -26,31 +26,108 @@ from entraclaw.tools.teams import filter_human_messages
 # _load_agent_instructions (mind-body split)
 # ---------------------------------------------------------------------------
 class TestLoadAgentInstructions:
-    """After the persona-sati integration, _load_agent_instructions returns
-    a generic tool-description string — no file I/O, no personality."""
+    """_load_agent_instructions priority order:
 
-    def test_returns_generic_tool_description(self) -> None:
-        from entraclaw.mcp_server import _load_agent_instructions
+      1. persona-sati remote (if PERSONA_SATI_MCP_URL + token command set)
+      2. Local ``prompts/agent_system.md`` file (if it exists)
+      3. Hardcoded tool-description string (final fallback)
+    """
 
-        result = _load_agent_instructions()
+    def test_returns_hardcoded_when_no_file_and_no_remote(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """With no persona-sati env and no local file, return the
+        hardcoded tool-description string."""
+        monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
+        monkeypatch.delenv("PERSONA_SATI_MCP_TOKEN_COMMAND", raising=False)
+
+        from entraclaw import mcp_server
+
+        # Point the prompt path at a non-existent file inside tmp_path.
+        monkeypatch.setattr(
+            mcp_server, "LOCAL_PROMPT_PATH", tmp_path / "missing.md"
+        )
+
+        result = mcp_server._load_agent_instructions()
         assert "EntraClaw Teams Interface" in result
         assert "persona-sati" in result
-        # Must NOT contain personality / channel-discipline content
-        assert "channel discipline" not in result.lower()
-        assert "Brandon" not in result
-        assert "watch-only" not in result.lower()
 
-    def test_does_not_import_path(self) -> None:
-        """The function should not depend on pathlib — no file I/O."""
-        import entraclaw.mcp_server as mod
-
-        assert not hasattr(mod, "Path"), "Path should not be imported"
-
-    def test_mcp_server_boots_without_prompt_file(self) -> None:
+    def test_mcp_server_boots(self) -> None:
         """The module-level mcp object should be created without error."""
         from entraclaw.mcp_server import mcp
 
         assert mcp.name == "EntraClaw Agent Identity"
+
+    def test_reads_local_file_when_present(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """When persona-sati is not configured but prompts/agent_system.md
+        exists, its contents become the system prompt."""
+        monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
+        monkeypatch.delenv("PERSONA_SATI_MCP_TOKEN_COMMAND", raising=False)
+
+        prompt_file = tmp_path / "agent_system.md"
+        prompt_file.write_text(
+            "# Agent rules\n\nAlways respond in the channel you are pinged in.",
+            encoding="utf-8",
+        )
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", prompt_file)
+
+        result = mcp_server._load_agent_instructions()
+        assert "Always respond in the channel" in result
+        assert "EntraClaw Teams Interface" not in result
+
+    def test_reads_local_file_when_remote_fails(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """When persona-sati fetch fails but the local file exists, fall
+        back to the file contents (not the hardcoded string)."""
+        import asyncio
+        import subprocess
+
+        monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
+        monkeypatch.setenv(
+            "PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli"
+        )
+        monkeypatch.setattr(
+            subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n"
+        )
+
+        def _boom(coro):
+            coro.close()
+            raise RuntimeError("remote MCP unreachable")
+
+        monkeypatch.setattr(asyncio, "run", _boom)
+
+        prompt_file = tmp_path / "agent_system.md"
+        prompt_file.write_text("LOCAL_FILE_PROMPT", encoding="utf-8")
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", prompt_file)
+
+        result = mcp_server._load_agent_instructions()
+        assert result == "LOCAL_FILE_PROMPT"
+
+    def test_empty_local_file_uses_hardcoded(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """An empty prompt file doesn't count — fall through to hardcoded."""
+        monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
+        monkeypatch.delenv("PERSONA_SATI_MCP_TOKEN_COMMAND", raising=False)
+
+        prompt_file = tmp_path / "agent_system.md"
+        prompt_file.write_text("   \n\n", encoding="utf-8")
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", prompt_file)
+
+        result = mcp_server._load_agent_instructions()
+        assert "EntraClaw Teams Interface" in result
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +145,19 @@ class TestLoadAgentInstructionsPersonaSati:
     """
 
     _LOCAL_PREFIX = "EntraClaw Teams Interface"
+
+    @pytest.fixture(autouse=True)
+    def _isolate_local_prompt(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """Point LOCAL_PROMPT_PATH at a non-existent file so these tests
+        only exercise the persona-sati / hardcoded-fallback paths — not
+        whatever prompts/agent_system.md happens to be on disk."""
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "LOCAL_PROMPT_PATH", tmp_path / "missing.md"
+        )
 
     def test_load_instructions_uses_local_when_env_unset(
         self, monkeypatch: pytest.MonkeyPatch
