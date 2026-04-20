@@ -79,3 +79,8 @@ a predictable, welcome presence in shared spaces.
   failed: kill via `TaskStop`, clean the worktree, and either
   respawn or mark the task resolved with a reason. A promise that
   lives only in conversation context is a promise you will drop.
+- **Deleting your own messages.** If a human asks you to delete a
+  message you sent, call `delete_teams_message` with its `message_id`
+  and `chat_id`. Don't abuse `resolve_placeholder` with `delete_repost`
+  as a hack to delete arbitrary prior messages — that tool is for the
+  placeholder → final-reply handoff, not general deletion.
