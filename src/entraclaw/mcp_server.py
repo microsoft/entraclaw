@@ -424,49 +424,6 @@ def _effective_user_id() -> str | None:
     return config.agent_user_id if config else None
 
 
-async def _init_chat() -> None:
-    """Phase 2: Establish the Teams chat (if authenticated)."""
-    if _identity is None or _identity.state == IdentityState.UNAUTHENTICATED:
-        if logger:
-            logger.warning("Skipping chat init — not authenticated")
-        return
-
-    from entraclaw.tools.teams import create_or_find_chat
-
-    config = _state.get("config")
-    chat_id_file = config.data_dir / "chat_id"
-
-    if config.human_user_ids:
-        saved_chat_id = None
-        if chat_id_file.is_file():
-            saved_chat_id = chat_id_file.read_text().strip()
-            if saved_chat_id:
-                if logger:
-                    logger.info("Reusing persisted chat: %s", saved_chat_id)
-                _state["chat_id"] = saved_chat_id
-
-        if not _state.get("chat_id"):
-            try:
-                token = _state.get("token") or _identity.session.token
-                chat = await create_or_find_chat(
-                    token=token,
-                    human_user_ids=config.human_user_ids,
-                    agent_user_id=_effective_user_id(),
-                    human_user_tenant_ids=config.human_user_tenant_ids,
-                    human_user_mails=config.human_user_mails,
-                    human_user_types=config.human_user_types,
-                )
-                _state["chat_id"] = chat["chat_id"]
-                chat_id_file.parent.mkdir(parents=True, exist_ok=True)
-                chat_id_file.write_text(chat["chat_id"])
-            except EntraClawError as exc:
-                if logger:
-                    logger.warning("Could not set up Teams chat: %s", exc)
-    else:
-        if logger:
-            logger.warning("ENTRACLAW_HUMAN_USER_ID not set — Teams tools will not work")
-
-
 async def _init_poll() -> None:
     """Phase 3: Initialize watched chats and start background polling."""
     _state["last_seen_timestamp"] = None
@@ -475,8 +432,7 @@ async def _init_poll() -> None:
 
     # Watched chats: dict of chat_id -> {seen_ids: set, last_ts: str|None}
     # Only chats the agent has explicitly registered (via create_chat or
-    # auto-discovery) are watched. There is no default group chat anymore —
-    # leftover _state["chat_id"] from _init_chat is intentionally ignored.
+    # auto-discovery) are watched. There is no default group chat.
     _state["watched_chats"] = {}
 
     # Load persisted watched chats (DMs created via create_chat tool)
@@ -518,19 +474,20 @@ async def _init_poll() -> None:
 
 
 async def _initialize() -> None:
-    """Acquire a token and set up the Teams chat.
+    """Acquire a token and start background polling.
 
-    Called lazily on the first tool invocation. Split into 3 phases
-    (eng review decision Tension 2):
+    Called lazily on the first tool invocation. Two phases:
     1. _init_auth() — authenticate (three-hop fast path or MSAL delegated)
-    2. _init_chat() — establish Teams chat
-    3. _init_poll() — set up background polling
+    2. _init_poll() — load persisted watched chats and start background polls
+
+    There is no longer a default Teams chat. Callers must pass a chat_id to
+    any Teams tool; chats to watch come from the watched_chats file or the
+    create_chat tool at runtime.
     """
     if _state.get("initialized"):
         return
 
     await _init_auth()
-    await _init_chat()
     await _init_poll()
 
     _state["initialized"] = True
@@ -1242,10 +1199,9 @@ async def send_teams_message(
 ) -> str:
     """Send a message via Microsoft Teams.
 
-    By default, messages go to the configured group chat. To send a
-    private DM or target any other chat, pass ``chat_id`` explicitly —
-    you can get one from ``create_chat`` (for a new 1:1 DM) or from
-    the ``meta.chat_id`` of a channel notification.
+    You must pass ``chat_id`` — every Teams chat has its own ID. Get one
+    from ``create_chat`` (for a new 1:1 DM) or from the ``meta.chat_id``
+    of a channel notification that the background poll pushed to you.
 
     After calling this, you don't need to call watch_teams_replies —
     the background poll pushes replies automatically via the channel
@@ -1262,16 +1218,17 @@ async def send_teams_message(
       chat_id = await create_chat(target_email="alice@example.com")
       await send_teams_message("Hey Alice", chat_id=chat_id)
 
-    Example — @mention in the group chat:
+    Example — @mention in a chat:
       message: '<at id="0">Alice Example</at> check this out'
       content_type: "html"
       mentions: [{"id": 0, "name": "Alice Example", "user_id": "abc-123"}]
+      chat_id: "19:...@thread.v2"
 
     Args:
         message: The text to send.
         content_type: "text" (default) or "html" for rich formatting.
         mentions: Optional list of mention dicts for @mentions.
-        chat_id: Optional chat ID to target. If empty, uses the default group chat.
+        chat_id: The chat to send to. Required.
 
     Returns:
         JSON with message_id and sent_at timestamp.
@@ -1300,9 +1257,14 @@ async def send_teams_message(
 
     from entraclaw.tools.teams import send
 
-    target_chat = chat_id or _state.get("chat_id")
+    target_chat = chat_id
     if not target_chat:
-        return json.dumps({"error": "Teams chat not established. Check setup."})
+        return json.dumps({
+            "error": (
+                "chat_id is required — pass the chat_id of the target Teams "
+                "chat (create one via create_chat if needed)."
+            )
+        })
 
     await _ensure_valid_token()
 
@@ -1368,7 +1330,7 @@ async def send_card(
 
     Args:
         card_type: One of "tool_activity", "task_status", "build_result".
-        chat_id: Target chat. Empty = default group chat.
+        chat_id: Target chat. Required — pass the chat_id of the chat to send the card to.
         title: Tool name or task name (for tool_activity and task_status).
         status: "running", "complete", "error", or "in_progress".
         detail: Short description (for tool_activity).
@@ -1420,9 +1382,14 @@ async def send_card(
 
     attachment = card_attachment(card)
 
-    target_chat = chat_id or _state.get("chat_id")
+    target_chat = chat_id
     if not target_chat:
-        return json.dumps({"error": "No chat available. Check setup."})
+        return json.dumps({
+            "error": (
+                "chat_id is required — pass the chat_id of the target Teams "
+                "chat (create one via create_chat if needed)."
+            )
+        })
 
     await _ensure_valid_token()
 
@@ -1455,20 +1422,18 @@ async def send_card(
 
 
 @mcp.tool()
-async def list_chat_members(chat_id: str = "") -> str:
+async def list_chat_members(chat_id: str) -> str:
     """List all members of a Teams chat with their user IDs.
 
-    By default lists members of the configured group chat. Pass
-    ``chat_id`` to list members of a specific chat (e.g., a DM you
-    created with create_chat).
+    Pass the chat_id of the chat you want member info for (e.g., a DM you
+    created with create_chat, or from a channel notification's meta.chat_id).
 
     Use this to resolve display names to user GUIDs for @mentions in
     send_teams_message. Returns user_id, name, email, and roles for
     each member.
 
     Args:
-        chat_id: Optional chat ID to target. If empty, uses the default
-            group chat.
+        chat_id: The chat to list members of. Required.
 
     Returns:
         JSON array of chat members.
@@ -1476,9 +1441,14 @@ async def list_chat_members(chat_id: str = "") -> str:
     await _initialize()
     from entraclaw.tools.teams import list_members
 
-    target_chat = chat_id or _state.get("chat_id")
+    target_chat = chat_id
     if not target_chat:
-        return json.dumps({"error": "Teams chat not established. Check setup."})
+        return json.dumps({
+            "error": (
+                "chat_id is required — pass the chat_id of the chat whose "
+                "members you want to list."
+            )
+        })
 
     await _ensure_valid_token()
     result = await _with_token_retry(
@@ -1489,14 +1459,17 @@ async def list_chat_members(chat_id: str = "") -> str:
 
 
 @mcp.tool()
-async def add_teams_member(email: str, tenant_id: str = "") -> str:
-    """Add a new member to the current Teams chat without restarting.
+async def add_teams_member(
+    email: str, chat_id: str, tenant_id: str = ""
+) -> str:
+    """Add a new member to a Teams chat.
 
-    Just provide the email address. For external users (different org),
-    the tenant is auto-resolved from the email domain. No tenant_id needed.
+    Just provide the email address and the chat_id. For external users
+    (different org), the tenant is auto-resolved from the email domain.
 
     Args:
         email: The user's email address (e.g., 'user@example.com').
+        chat_id: The chat to add the member to. Required.
         tenant_id: Optional override. Auto-resolved from email domain if empty.
 
     Returns:
@@ -1504,6 +1477,14 @@ async def add_teams_member(email: str, tenant_id: str = "") -> str:
     """
     await _initialize()
     from entraclaw.tools.teams import add_member
+
+    if not chat_id:
+        return json.dumps({
+            "error": (
+                "chat_id is required — pass the chat_id of the target Teams "
+                "chat (create one via create_chat if needed)."
+            )
+        })
 
     # Auto-resolve tenant ID from email domain if not provided
     if not tenant_id and "@" in email:
@@ -1515,14 +1496,10 @@ async def add_teams_member(email: str, tenant_id: str = "") -> str:
         if resolved:
             tenant_id = resolved
 
-    chat_id = _state.get("chat_id")
-    if not chat_id:
-        return json.dumps({"error": "Teams chat not established. Check setup."})
-
     await _ensure_valid_token()
     result = await _with_token_retry(
         add_member,
-        chat_id=str(chat_id),
+        chat_id=chat_id,
         email=email,
         tenant_id=tenant_id or None,
     )
@@ -1534,16 +1511,14 @@ async def create_chat(target_email: str, target_tenant_id: str = "") -> str:
     """Create a 1:1 private DM with a user by email.
 
     **Use this when the human asks you to DM, message privately, or
-    start a 1:1 conversation with someone.** The default group chat
-    is for public discussion; this tool creates a private side channel.
+    start a 1:1 conversation with someone.**
 
     Returns a chat_id you can pass to send_teams_message,
-    read_teams_messages, and list_chat_members to operate on that chat
-    independently of the default group chat.
+    read_teams_messages, and list_chat_members to operate on that chat.
 
     The new chat is automatically registered for background polling —
-    replies will push to you via channel notifications just like the
-    group chat. Registration persists across MCP server restarts.
+    replies will push to you via channel notifications. Registration
+    persists across MCP server restarts.
 
     Graph's oneOnOne chat creation is idempotent — calling this twice
     with the same email returns the existing chat, not a duplicate.
@@ -1595,20 +1570,18 @@ async def create_chat(target_email: str, target_tenant_id: str = "") -> str:
 
 
 @mcp.tool()
-async def read_teams_messages(count: int = 5, chat_id: str = "") -> str:
-    """Read recent messages from any Microsoft Teams chat.
+async def read_teams_messages(chat_id: str, count: int = 5) -> str:
+    """Read recent messages from a Microsoft Teams chat.
 
-    By default reads from the configured group chat. Pass ``chat_id``
-    to read from a specific chat — e.g., a DM you created with
-    create_chat, or any other chat_id you know.
+    Pass the chat_id of the chat you want to read — e.g., a DM you
+    created with create_chat, or the meta.chat_id from a channel
+    notification.
 
     Authentication is automatic. No credentials needed.
 
     Args:
+        chat_id: The chat to read from. Required.
         count: Number of messages to return (default 5, max ~50).
-        chat_id: Optional chat ID to target. If empty, uses the default
-            group chat. Pass the chat_id from create_chat or from a
-            channel notification's meta.chat_id to read from a specific chat.
 
     Returns:
         JSON array of messages, each with message_id, from, content, sent_at.
@@ -1616,9 +1589,14 @@ async def read_teams_messages(count: int = 5, chat_id: str = "") -> str:
     await _initialize()
     from entraclaw.tools.teams import read
 
-    target_chat = chat_id or _state.get("chat_id")
+    target_chat = chat_id
     if not target_chat:
-        return json.dumps({"error": "Teams chat not established. Check setup."})
+        return json.dumps({
+            "error": (
+                "chat_id is required — pass the chat_id of the chat to read "
+                "from (create one via create_chat if needed)."
+            )
+        })
 
     await _ensure_valid_token()
     result = await _with_token_retry(
@@ -1631,13 +1609,16 @@ async def read_teams_messages(count: int = 5, chat_id: str = "") -> str:
 
 @mcp.tool()
 async def watch_teams_replies(
+    chat_id: str,
     timeout: int = 30,
     interval: int = 5,
     ctx: Context | None = None,
 ) -> str:
-    """Poll Teams for new replies from the human. Returns when new messages
-    arrive or after timeout seconds. Uses server-side cursor to track what's
-    been seen — only returns genuinely new human messages.
+    """Poll Teams for new replies from the human in a specific chat.
+
+    Returns when new messages arrive or after timeout seconds. Uses a
+    server-side cursor to track what's been seen — only returns genuinely
+    new human messages.
 
     WHEN TO CALL: Always after send_teams_message. This completes the
     bidirectional loop — send a message, then watch for the reply.
@@ -1646,6 +1627,8 @@ async def watch_teams_replies(
     again with a longer timeout, or move on and check back later.
 
     Args:
+        chat_id: The chat to watch. Required — pass the chat_id of the
+            Teams conversation you want to watch (e.g. from create_chat).
         timeout: Max seconds to poll before returning empty (default 30).
         interval: Seconds between poll iterations (default 5).
 
@@ -1657,9 +1640,13 @@ async def watch_teams_replies(
     await _initialize()
     from entraclaw.tools.teams import filter_human_messages, read
 
-    chat_id = _state.get("chat_id")
     if not chat_id:
-        return json.dumps({"error": "Teams chat not established. Check setup."})
+        return json.dumps({
+            "error": (
+                "chat_id is required — pass the chat_id of the Teams chat "
+                "to watch (create one via create_chat if needed)."
+            )
+        })
 
     # Must match the displayName that Graph API returns in message.from.user.displayName
     # NOT the UPN — Graph returns "EntraClaw Agent", not "entraclaw-agent@werner.ac"
