@@ -15,6 +15,7 @@ import json
 import logging
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
@@ -32,29 +33,58 @@ from entraclaw.tools.teams import acquire_agent_user_token
 
 logger: logging.Logger | None = None
 
+# Local system-prompt file used when persona-sati isn't reachable. Kept as a
+# module attribute so tests can monkey-patch it at an isolated path.
+LOCAL_PROMPT_PATH = (
+    Path(__file__).resolve().parents[2] / "prompts" / "agent_system.md"
+)
 
-def _load_agent_instructions() -> str:
-    """Return the agent's system prompt.
 
-    If PERSONA_SATI_MCP_URL is set, fetch the prompt from the cloud
-    persona-sati MCP server via get_system_prompt(). Otherwise (or on
-    any failure), return the local tool-description fallback.
+def _local_fallback_prompt() -> str:
+    """Return the local fallback prompt.
 
-    The body (entraclaw) delegates personality to the mind (persona-
-    sati). Revoking persona-sati access gracefully degrades entraclaw
-    to a generic communication tool; it never crashes the boot.
+    Reads ``prompts/agent_system.md`` if it exists and has non-empty
+    contents. Otherwise returns the hardcoded tool-description string so
+    boot always succeeds.
     """
-    import os
-    import subprocess
-    import sys
-
-    local_fallback = (
+    hardcoded = (
         "EntraClaw Teams Interface: provides tools for sending and "
         "receiving Microsoft Teams messages, managing group chats, "
         "email polling, and daily summary generation. This server "
         "handles communication channels only. For personality, memory, "
         "and behavioral rules, connect to the persona-sati MCP server."
     )
+    try:
+        if LOCAL_PROMPT_PATH.is_file():
+            contents = LOCAL_PROMPT_PATH.read_text(encoding="utf-8").strip()
+            if contents:
+                return contents
+    except OSError:
+        pass
+    return hardcoded
+
+
+def _load_agent_instructions() -> str:
+    """Return the agent's system prompt.
+
+    Priority order:
+      1. persona-sati remote (if ``PERSONA_SATI_MCP_URL`` and
+         ``PERSONA_SATI_MCP_TOKEN_COMMAND`` are set and the fetch
+         succeeds)
+      2. Local ``prompts/agent_system.md`` file (if it exists)
+      3. Hardcoded tool-description string (final fallback)
+
+    The body (entraclaw) delegates personality to the mind (persona-
+    sati). When persona-sati is unreachable the agent falls back to the
+    local prompt file so behavioral rules still load; only when that is
+    also missing do we return the minimal tool description. Boot never
+    crashes.
+    """
+    import os
+    import subprocess
+    import sys
+
+    local_fallback = _local_fallback_prompt()
 
     remote_url = os.environ.get("PERSONA_SATI_MCP_URL", "").strip()
     token_cmd = os.environ.get("PERSONA_SATI_MCP_TOKEN_COMMAND", "").strip()
