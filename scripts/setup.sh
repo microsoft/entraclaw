@@ -101,10 +101,16 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         Provisions a resource group, storage account, and"
     echo "                         container scoped to the Agent User. Recommended"
     echo "                         for durable, cross-device operation. ADR-005."
+    echo "                         Also unsets ENTRACLAW_KEEP_MEMORY_LOCAL so the"
+    echo "                         PreToolUse hook blocks local Claude Code auto-memory"
+    echo "                         writes — mind content routes through persona-sati."
     echo "  --keep-memory-local    [default] Operational data stays on the local"
     echo "                         filesystem (~/.entraclaw/data). Kept as an explicit"
     echo "                         flag for backwards compatibility; this is now the"
     echo "                         default behavior. Pass --cloud-memory to override."
+    echo "                         Also sets ENTRACLAW_KEEP_MEMORY_LOCAL=true, which"
+    echo "                         opts the PreToolUse hook out so Claude Code's local"
+    echo "                         auto-memory directory is writable again."
     echo "  --help, -h             Show this help"
     exit 0
 fi

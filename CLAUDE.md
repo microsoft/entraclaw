@@ -21,6 +21,19 @@
 - Always create BlueprintPrincipal explicitly after Blueprint — it is NOT auto-created
 - Agent IDs are service principals, not users — never create fake user accounts with passwords
 - Parse `az` CLI output as JSON, not TSV — TSV can be corrupted by warnings
+- **Memory routing is mechanically enforced.** A PreToolUse hook blocks
+  `Write`/`Edit`/`NotebookEdit` to `~/.claude/projects/<slug>/memory/**`
+  unless `ENTRACLAW_KEEP_MEMORY_LOCAL=true`. Cloud-memory setups (the
+  default after `setup.sh --cloud-memory`) route all memory writes
+  through `mcp__persona-sati__write_memory_file`, which lands content
+  in persona-sati's blob. Three-way decision tree for durable writes:
+  - Agent body/channel behavior rule → `prompts/anatomy/*.md` via PR.
+  - Mind content (personality, relationships, philosophy, running
+    jokes) → `mcp__persona-sati__write_memory_file`.
+  - Operational state (interactions, summaries, watched chats, email
+    cursor) → openclaw blob; written by the MCP server, not by you.
+  The local auto-memory directory is ephemeral and off by default;
+  treat it as read-only unless the user explicitly enables it.
 
 ## Current Runtime Model
 
