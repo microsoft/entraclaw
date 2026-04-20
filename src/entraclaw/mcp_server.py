@@ -2043,7 +2043,12 @@ async def read_teams_messages(chat_id: str, count: int = 5) -> str:
         count: Number of messages to return (default 5, max ~50).
 
     Returns:
-        JSON array of messages, each with message_id, from, content, sent_at.
+        JSON array of messages, each with message_id, from, content,
+        sent_at, reply_to_ids, and attachments (list of {id, content_type,
+        content_url, name, thumbnail_url}; empty when the message has
+        none). Use attachments[].content_url with view_image to resolve
+        inline images referenced by ``<attachment id="UUID">`` tags in
+        content.
     """
     await _initialize()
     from entraclaw.tools.teams import read
