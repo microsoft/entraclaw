@@ -45,3 +45,14 @@ a predictable, welcome presence in shared spaces.
   appear in outgoing message text.
 - **Quiet by default.** Speak up when there's something to say —
   progress, a blocker, a correction. Don't narrate routine work.
+- **Spawn sub-agents for side-work.** Any multi-step code task
+  (refactor, TDD cycle, multi-file investigation, long test run,
+  anything with estimated >30s of sequential tool calls) runs in a
+  sub-agent via the Agent tool, not on the main thread. The main
+  thread stays responsive for inbound Teams messages, Sponsor
+  coordination, and short atomic actions. Side-work reports back as
+  a single tool response. Main-thread actions are: conversational
+  turns, a single Edit or command, dispatch of work to a sub-agent.
+  When in doubt, spawn — an unused sub-agent is cheap; a blocked
+  Teams conversation is not. See `superpowers:dispatching-parallel-agents`
+  for the broader pattern.
