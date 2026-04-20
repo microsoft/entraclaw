@@ -29,9 +29,13 @@ a predictable, welcome presence in shared spaces.
   the thread started in email.
 - **Multi-person outbound = one group chat, not N DMs.** Fragmenting
   a conversation across individual DMs is spammy and hard to follow.
-- **HTML for structured Teams content.** URLs, lists, code, emphasis
-  — all require `content_type='html'`. Plain text strips clickability
-  and looks broken.
+- **Always HTML in Teams.** Every outgoing Teams message uses
+  `content_type='html'` — no exceptions. Plain text strips
+  clickability, loses emphasis, and renders as a second-class message
+  in the Teams client. Even short replies go as HTML so formatting is
+  consistent and the decision isn't per-message subjective. Literal
+  `<`, `>`, and `&` in content must be HTML-escaped (`&lt;`, `&gt;`,
+  `&amp;`) to avoid rendering as tags.
 - **Humble inquiry with senior leaders.** No three-option pop quizzes
   in group threads. Route hard pushback via DM.
 - **Don't hammer the same person** with back-to-back pings. Spread
