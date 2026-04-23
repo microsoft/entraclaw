@@ -761,6 +761,39 @@ class TestTeamsSend:
         body = _json.loads(route.calls.last.request.content)
         assert "mentions" not in body
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_default_content_type_is_html(self) -> None:
+        """Per prompts/anatomy/channel-discipline.md — every outgoing
+        Teams message is HTML, no exceptions. The tool signature must
+        not require callers to remember this; the default is ``html``
+        and plain text is explicit opt-in."""
+        route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(
+                201, json={"id": "msg-default", "createdDateTime": "2024-01-01"}
+            )
+        )
+        await send(chat_id="c1", message="<p>hi</p>", token="tok")
+        import json as _json
+
+        body = _json.loads(route.calls.last.request.content)
+        assert body["body"]["contentType"] == "html"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_explicit_text_opt_out_still_works(self) -> None:
+        """Callers can still request plain text explicitly."""
+        route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(
+                201, json={"id": "msg-text", "createdDateTime": "2024-01-01"}
+            )
+        )
+        await send(chat_id="c1", message="plain", token="tok", content_type="text")
+        import json as _json
+
+        body = _json.loads(route.calls.last.request.content)
+        assert body["body"]["contentType"] == "text"
+
 
 # ---------------------------------------------------------------------------
 # list_members

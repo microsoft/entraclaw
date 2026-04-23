@@ -1556,7 +1556,7 @@ async def _push_channel_notification(
 @mcp.tool()
 async def send_teams_message(
     message: str,
-    content_type: str = "text",
+    content_type: str = "html",
     mentions: list[dict] | None = None,
     chat_id: str = "",
 ) -> str:
@@ -1570,26 +1570,30 @@ async def send_teams_message(
     the background poll pushes replies automatically via the channel
     notification for every watched chat.
 
-    To @mention someone in the message, use HTML content_type with
-    ``<at id="N">Display Name</at>`` tags in the message body, and pass
-    a mentions list. Each mention dict needs:
+    ``content_type`` defaults to ``"html"`` per the channel-discipline
+    rule in ``prompts/anatomy/channel-discipline.md`` ("Always HTML in
+    Teams — no exceptions"). Wrap paragraphs in ``<p>…</p>``; escape
+    literal ``<``, ``>``, ``&`` as ``&lt;``, ``&gt;``, ``&amp;``. Pass
+    ``content_type="text"`` only when plain text is genuinely required.
+
+    To @mention someone, put ``<at id="N">Display Name</at>`` tags in
+    the HTML body and pass a mentions list. Each mention dict needs:
       - id: int matching the at-tag id
       - name: display name
       - user_id: their Entra user GUID (get from chat members via read_teams_messages)
 
     Example — DM someone:
       chat_id = await create_chat(target_email="alice@example.com")
-      await send_teams_message("Hey Alice", chat_id=chat_id)
+      await send_teams_message("<p>Hey Alice</p>", chat_id=chat_id)
 
     Example — @mention in a chat:
-      message: '<at id="0">Alice Example</at> check this out'
-      content_type: "html"
+      message: '<p><at id="0">Alice Example</at> check this out</p>'
       mentions: [{"id": 0, "name": "Alice Example", "user_id": "abc-123"}]
       chat_id: "19:...@thread.v2"
 
     Args:
-        message: The text to send.
-        content_type: "text" (default) or "html" for rich formatting.
+        message: The text to send (HTML by default).
+        content_type: "html" (default) or "text" — see note above.
         mentions: Optional list of mention dicts for @mentions.
         chat_id: The chat to send to. Required.
 
