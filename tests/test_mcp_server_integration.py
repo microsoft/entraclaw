@@ -1988,6 +1988,57 @@ class TestNoDefaultChat:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
 
+    @pytest.mark.asyncio
+    async def test_send_teams_message_defaults_to_html(
+        self, monkeypatch
+    ) -> None:
+        """Channel discipline: every outgoing Teams message is HTML.
+
+        The MCP tool signature must default ``content_type`` to ``"html"``
+        so callers cannot forget and silently ship plain text — which
+        renders as a second-class message in Teams and breaks links.
+        """
+        from entraclaw import mcp_server
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.clear()
+            fake_config = MagicMock()
+            fake_config.mode = "agent_user"
+            mcp_server._state["config"] = fake_config
+
+            captured: dict = {}
+
+            async def fake_with_token_retry(fn, **kwargs):
+                captured.update(kwargs)
+                return {
+                    "message_id": "msg-html",
+                    "sent_at": "2026-04-23T18:30:00+00:00",
+                }
+
+            monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **kw: None)
+            monkeypatch.setattr(
+                mcp_server, "_initialize", AsyncMock(return_value=None)
+            )
+            monkeypatch.setattr(
+                mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+            )
+            monkeypatch.setattr(
+                mcp_server, "_with_token_retry", fake_with_token_retry
+            )
+
+            await mcp_server.send_teams_message(
+                message="<p>hi</p>", chat_id="c1"
+            )
+
+            assert captured.get("content_type") == "html", (
+                "send_teams_message must default content_type='html' per "
+                "prompts/anatomy/channel-discipline.md"
+            )
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+
 
 # ---------------------------------------------------------------------------
 # post_thinking_placeholder / resolve_placeholder MCP wrappers

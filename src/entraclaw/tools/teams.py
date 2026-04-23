@@ -531,14 +531,17 @@ async def send(
     chat_id: str,
     message: str,
     token: str,
-    content_type: str = "text",
+    content_type: str = "html",
     mentions: list[dict] | None = None,
     prefix: str | None = None,
     attachments: list[dict] | None = None,
 ) -> dict:
     """Send *message* to the Teams chat identified by *chat_id*.
 
-    ``content_type`` must be ``"text"`` or ``"html"``.
+    ``content_type`` defaults to ``"html"`` per
+    ``prompts/anatomy/channel-discipline.md`` ("Always HTML in
+    Teams — no exceptions"). Pass ``content_type="text"`` explicitly
+    only when plain text is genuinely required.
 
     When *prefix* is set (e.g. ``"[EntraClaw]"``), the message is prefixed
     to indicate it was sent by the agent using delegated credentials.
