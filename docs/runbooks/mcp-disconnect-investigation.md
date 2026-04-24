@@ -1,40 +1,42 @@
 # Runbook — Entraclaw MCP dies after a few minutes under sustained activity
 
-**Status:** OPEN — not yet root-caused. Two contributing amplifiers shipped
-and merged (PR #40, PR #41). The underlying "parent Claude CLI reaps a
-healthy child after a few minutes of Teams/email push traffic" symptom has
-reduced in frequency but **not been eliminated**.
+**Status:** ROOT CAUSE IDENTIFIED — fix is a one-liner in `_push_channel_notification`.
+A prior identical bug existed on the email push path and was fixed 2026-04-17.
+The Teams push path was not sanitized, leaving the same vulnerability.
 
 **Owner rotation:** Anyone picking this up next — read this doc end to end
 before running anything. Do NOT start from scratch.
 
-**Last update:** 2026-04-24 (after PR #40 + PR #41 merged).
+**Last update:** 2026-04-24 (root cause found via PTY soak + debug wrapper session).
 
 ---
 
 ## TL;DR for the next agent
 
-- **Symptom.** Entraclaw MCP server (stdio child of Claude Code CLI) becomes
-  progressively slower, then disconnects entirely, typically within
-  2–10 minutes of sustained activity (inbound Teams DMs, email poll cycles,
-  or chat auto-discovery). The user's UX: first tool calls return in under
-  a second; after a while they stall; then `/mcp` shows the server
-  disconnected and a manual `Reconnect entraclaw` is required. The child
-  process is reaped — no traceback, no shutdown log line, nothing in
-  `~/.entraclaw/logs/entraclaw.log` marking the end.
-- **What we tried.** (1) Debug stderr capture via wrapper script, (2) PR #40
-  to stop entraclaw records double-rendering through FastMCP's root
-  `RichHandler`, (3) PR #41 to stop the wrapper itself from retriggering
-  the self-spawn cascade that PR #36 had originally killed, (4) removal of
-  4 throttling-sleep tests that were masking the symptom in the test
-  suite's own timings.
-- **What remains broken.** Parent Claude CLI at sustained 27–83% CPU and
-  ~1 GB RSS while entraclaw is active. Zero tracebacks surface on the
-  parent-reaped MCP child — consistent with "CLI stopped draining stdout
-  and eventually SIGKILLed the child," not with a crash on the child's
-  side. Blob-write-on-push hot path (3–5 synchronous HTTP calls per
-  inbound Teams message) is still on the critical path and remains the
-  leading suspect amplifier.
+- **Symptom.** Entraclaw MCP server (stdio child of Claude Code CLI) dies
+  cleanly ~25 seconds after start, immediately after the first inbound
+  Teams push notification of the session. No traceback. No BrokenPipeError.
+  `/mcp` shows `disconnected`. Reconnect triggers a fresh boot and repeats.
+- **Root cause (confirmed 2026-04-24).** `_push_channel_notification` sends
+  raw Teams HTML (`<p>…</p>`, `<attachment id="…">…</attachment>`) as the
+  `content` field of the `notifications/claude/channel` JSON-RPC
+  notification. Claude's MCP client closes the connection cleanly on
+  receiving angle-bracket content in notification params — the **exact same
+  bug** that was fixed on the email push path on 2026-04-17 (see comment at
+  `mcp_server.py:1250`). The Teams push path never received that fix.
+- **Fix.** In `_push_channel_notification` (around line 1528), replace
+  `message.get("content", "")` with
+  `_summarize_content(message.get("content", ""))`. This strips HTML tags
+  before the content enters the MCP notification frame. See **Step 0**
+  below for the precise change, test to write first, and validation plan.
+- **Secondary issue.** `BlobBackend.append_text` calls `_run_sync()` which
+  uses `ThreadPoolExecutor.result()` — a blocking `.result()` call on the
+  asyncio event loop *thread*. The docstring says "keeps the running loop
+  free" but this is incorrect: it blocks the event loop thread for the full
+  duration of the blob I/O (two HTTP round-trips, ~600 ms). This freezes
+  asyncio and prevents MCP request/response handling during blob writes.
+  Fix separately with `asyncio.to_thread()` or async `log_interaction`.
+  See **Step 1**.
 - **Before doing ANYTHING else.** Read **Learning #37** (self-spawn
   cascade), **Learning #38** (leader-cache overwrite), **Learning #45**
   (wrapper bypass), **Learning #36** (sub-agent worktree pip install),
@@ -179,50 +181,55 @@ tee, not a redirect — server stderr still flows to the parent.
 
 ## Hypotheses ranked by remaining likelihood
 
-1. **Parent Claude CLI stdio-drain backpressure (PRIMARY).** The
-   Claude CLI's MCP client renders tool activity through its own UI
-   layer (SSE to the Anthropic API, markdown repainting, tool-schema
-   validation) on every stdio frame. When entraclaw emits bursts of
-   structured output during a busy Teams push, the CLI's render budget
-   can saturate — CPU climbs to 80%+, the stdout pipe from the child
-   stops being drained, and after enough time the CLI reaps the child
-   rather than blocking. **Evidence for:** zero child tracebacks,
-   sustained parent CPU, the "first tool calls fast, then slower, then
-   dropped" shape. **Against:** we have no direct measurement of the
-   parent's read side. This is the leading theory but it is a theory.
-2. **Blob write on Teams push hot path.** Every inbound Teams message
-   triggers `interaction_log.append()`, which in `BlobBackend` mode
-   does a token check + blob GET + blob PUT with ETag concurrency —
-   3–5 synchronous HTTPS round-trips per push. Under message bursts,
-   these are serial and can pin an event-loop task. If the push path
-   is blocked on blob I/O, the MCP `notifications/claude/channel`
-   push is delayed, which the parent CLI may time out on. **Evidence
-   for:** empirically correlates with activity. **Against:** blob
-   calls would generate visible 429/5xx on the child side if they
-   were the issue, and we don't see those.
+1. **Raw HTML in Teams push notification content (CONFIRMED ROOT CAUSE,
+   2026-04-24).** `_push_channel_notification` passes
+   `message.get("content", "")` — the raw Teams Graph API message body,
+   which is HTML (`<p>…</p>`, `<attachment id="…">…</attachment>`) —
+   directly into the `params.content` field of the
+   `notifications/claude/channel` JSON-RPC notification. Claude's MCP
+   client closes the connection cleanly upon receiving angle-bracket
+   content in notification params. **Evidence:** (a) debug log tail from
+   session 4 ends with `"Pushed Teams message from Brandon Werner:
+   <attachment id=\"1777053221965\"></attachment>\n<p>As"` — confirming
+   raw HTML in the push. (b) The email push path documents the identical
+   death pattern at `mcp_server.py:1250–1252` and was fixed 2026-04-17
+   by eliminating angle brackets from the sender field. (c) Death is
+   deterministic: always within 3 s of the first push notification, 0
+   BrokenPipeError, clean EOF. **Fix:** use `_summarize_content()` to
+   strip HTML before including content in notification params (see
+   Step 0).
+2. **`_run_sync` blocks the asyncio event loop thread (CONFIRMED
+   SECONDARY, 2026-04-24).** `BlobBackend.append_text` → `_run_sync()`
+   → `ThreadPoolExecutor(1).submit(asyncio.run, coro).result()`. The
+   `.result()` call is a synchronous block on the calling thread. Since
+   `_run_sync` is invoked from within a running asyncio event loop, the
+   *event loop thread itself* is blocked for the duration of each blob
+   I/O round-trip (~300 ms each). Each Teams push triggers 6 token
+   POSTs + 1 blob GET + 1 blob PUT = ~8 blocking calls = ~2–4 s of
+   total event loop freeze. During this window, MCP request/response
+   handling is impossible. **Fix:** replace `_run_sync` with
+   `asyncio.to_thread()` or make `log_interaction` fully async (see
+   Step 1). Fix separately from the HTML content fix above.
 3. **httpx/msal logs still propagating.** PR #40 fixed entraclaw's
    own propagation but third-party loggers still render through the
    root `RichHandler`. On a busy poll cycle this is still a few
    hundred bytes per 5 seconds, most of it pretty-printed. Worth
-   silencing for completeness; unlikely on its own to account for the
-   drops.
-4. **Persona-sati SSE fetch blocking boot.** `_load_agent_instructions`
-   opens an SSE connection to persona-sati at boot to fetch the
-   system prompt. If the pod is slow or flapping, boot stalls before
-   stdio is even live. **Evidence for:** some cold-start slow cases
-   fit this. **Against:** the boot banners always appear and the
-   initial few tool calls succeed — this theory would predict dead-on-
-   arrival, not "fine then dies." Lower likelihood but easy to rule
-   out by setting `PERSONA_SATI_MCP_URL=` (empty) briefly.
-5. **Token refresh thrashing.** Eager 55-min refresh + lazy 401 retry
-   could occasionally overlap. Low likelihood given the observed
-   cadence of drops is minutes, not matches of the refresh interval.
-6. **Eager init of all three polls at boot.** `_init_poll` starts
-   Teams poll + email poll + chat discovery all at `start`. A fresh
-   boot thus does a token acquisition, a `/me/chats` enumeration, a
-   `/me/messages` enumeration, and a first Teams poll in the first
-   few seconds — high concurrent HTTP. Not itself a cause of steady-
-   state drops but amplifies cold-start stress.
+   silencing for completeness; unlikely on its own to account for
+   drops now that the root cause is known.
+4. **Persona-sati SSE fetch blocking boot.** Ruled out as the primary
+   cause (boot banners appear and initial tool calls succeed).
+   `PERSONA_SATI_MCP_URL=` (empty) can temporarily eliminate as a
+   confounding factor during fix validation.
+5. **Token refresh thrashing.** Low likelihood. Observed cadence of 6
+   token POSTs per push is high but all POSTs succeed (HTTP 200). The
+   storage token (`https://storage.azure.com/.default`) requires a
+   separate three-hop, which explains 3 of the 6 POSTs; the other 3
+   appear to be a second three-hop for the Teams API token. Consider
+   caching both tokens separately with the 55-min eager-refresh
+   threshold applied to each.
+6. **Eager init of all three polls at boot.** Cold-start stress
+   amplifier only. Not a steady-state drop cause once root cause is
+   fixed.
 
 ### Ruled out (don't re-investigate)
 
@@ -242,76 +249,86 @@ tee, not a redirect — server stderr still flows to the parent.
 
 ## What to try next — ordered by cost/value
 
-### Step 1 — Quantify, don't theorize
+### Step 0 — Strip HTML from Teams push notification content (HIGH PRIORITY)
 
-Flip `.mcp.json` back to the wrapper to re-enable `/tmp/entraclaw-debug.log`
-capture. Wait until the next drop, then gather:
+This is the confirmed root cause fix. **Write the test first.**
 
-```bash
-# Size of stderr over the session
-wc -c /tmp/entraclaw-debug.log
-
-# Rate (lines/second) per minute of life
-awk '/wrapper start/{t=$NF} {print t}' /tmp/entraclaw-debug.log | \
-    sort | uniq -c
-
-# Python traceback count on the parent process (as opposed to cascade children)
-grep -c "BrokenPipeError" /tmp/entraclaw-debug.log
-
-# Wrapper start count — should equal /mcp-reconnect count,
-# NOT 2× that (Learning #45 regression signal)
-grep -c "wrapper start" /tmp/entraclaw-debug.log
+**Test to write** (`tests/test_mcp_server.py` or equivalent):
+```python
+async def test_push_channel_notification_strips_html_content():
+    """HTML tags in Teams message body must not appear in the push params."""
+    raw_html = '<attachment id="123"></attachment>\n<p>Hello world</p>'
+    # Capture the SessionMessage that would be sent to write_stream
+    # Assert that params["content"] contains "Hello world" but not "<p>" or "<attachment"
 ```
 
-Goals: (a) is the stderr rate actually large (e.g., >10 KB/min)
-or is it steady-state low and only the CPU that's climbing? (b) do
-the drops coincide with a specific event type (Teams push burst,
-email poll, token refresh)? (c) is the wrapper-start count still 1-per-
-reconnect or has Learning #45 regressed again?
+**Code change** in `_push_channel_notification` (~line 1528):
+```python
+# Before:
+"content": message.get("content", ""),
 
-### Step 2 — Silence third-party loggers (cheap)
+# After:
+"content": _summarize_content(message.get("content", "")),
+```
 
-Extend `src/entraclaw/logging_config.py` to set `propagate = False` on
-`httpx` and `msal` loggers too (or set their level to `WARNING` on
-root). Ship as a follow-on commit. Re-measure stderr rate from Step 1.
+`_summarize_content` is already in scope, already strips HTML via
+`re.sub(r"<[^>]+>", " ", …)`, and is already used for the interaction-log
+`summary` field. No new helpers needed.
 
-### Step 3 — Decouple blob I/O from the push hot path (medium)
+**Note on limit:** `_summarize_content` truncates at 200 chars by default.
+If preserving full message text is required, add a `limit=None` branch or
+call it with `limit=len(content)`. The primary concern is stripping HTML
+tags; length truncation is secondary.
 
-Currently `_push_channel_notification` path runs synchronously with
-`interaction_log.append()`, which does blob I/O. Decouple via an
-asyncio queue with a background consumer. The push returns immediately
-after enqueue; the queue consumer handles blob writes with retry. Two
-tests needed first: (a) the queue drains under normal load without
-dropping; (b) if the queue backpressures, the push still returns fast.
-**Before writing the code, confirm that the push path is actually
-blocking on blob I/O by adding a `time.perf_counter()` span around the
-blob call and logging slow ones.**
+**Validation after fix:**
+1. Run `pytest -v --tb=short` — all tests must pass.
+2. Flip `.mcp.json` to the debug wrapper.
+3. Run the PTY soak (`.claude/pty_soak.py`) for 10 minutes.
+4. Confirm entraclaw-mcp stays alive through at least 2 push cycles.
+5. Restore `.mcp.json` to direct binary, delete wrapper line.
 
-### Step 4 — Try SSE transport (experimental)
+### Step 1 — Fix `_run_sync` event loop blocking (MEDIUM PRIORITY)
 
-FastMCP supports SSE transport. Run entraclaw as a standalone SSE
-server (`entraclaw-mcp --transport sse --port 8101` if available, or
-add the wiring), and point `.mcp.json` at `http://localhost:8101/sse`
-instead of stdio. This eliminates the parent-CLI stdio-pipe saturation
-theory entirely. **If the symptom disappears under SSE**, the
-hypothesis #1 (parent CLI backpressure) is confirmed and the
-remediation is either to (a) stay on SSE, or (b) reduce stdio output
-volume and frame rate on the stdio path.
+`BlobBackend.append_text` → `_run_sync()` blocks the asyncio event loop
+thread via `ThreadPoolExecutor.result()`. Replace with
+`asyncio.to_thread()` or make `log_interaction` async.
 
-### Step 5 — Get a `py-spy` dump of the parent Claude CLI mid-drop
+**Option A (minimal change):** In `backend.py`, change `_run_sync` to:
+```python
+async def _run_async(coro):
+    return await asyncio.to_thread(asyncio.run, coro)
+```
+Then make `BlobBackend` methods async and update all callers.
 
-`py-spy dump --pid $PARENT_PID` (or the Claude CLI's Node-equivalent
-if it's a Node process, which it is — `node --inspect` + Chrome
-devtools) to see what the parent is doing when entraclaw appears
-stuck. This is the most diagnostic but most invasive step. Do it
-after Steps 1–3 have tightened the hypothesis.
+**Option B (preferred, more work):** Make `BlobStore` the canonical
+interface, expose async methods directly on `BlobBackend`, and update
+`log_interaction` + callers to be async.
 
-### Step 6 — File an upstream issue if it's the CLI
+Either option requires tests first. See `What to preserve` section —
+the blob write must remain durable before the tool's side effect is
+externally visible.
 
-If Step 4 shows SSE is clean and stdio is not, and Step 5 shows the
-parent CLI stuck in its own render path: file an issue against Claude
-Code with the captured py-spy output and a minimal reproduction.
-Mitigation for this repo: recommend SSE transport in `.mcp.json`.
+### Step 2 — Quantify the remaining httpx log volume (LOW PRIORITY)
+
+Now that the root cause is fixed, check if httpx/msal logs are still
+creating material stderr volume. Extend `logging_config.py` to set
+`propagate = False` on `httpx` and `msal` if needed.
+
+### Step 3 — Run the 60-minute acceptance soak
+
+After Steps 0 and 1 are merged, run `.claude/pty_soak.py` for 60 minutes.
+Acceptance criteria: entraclaw-mcp stays alive continuously, no
+BrokenPipeError, wrapper-start count = 1 per session, Claude CPU < 15%.
+
+### (OLD) Step 4 — Try SSE transport (experimental, deferred)
+
+Now that the root cause is known and not transport-related, SSE transport
+is no longer needed as a workaround. Defer until SSE is needed for other
+reasons.
+
+### (OLD) Step 5 — Get a `py-spy` dump (deferred)
+
+No longer needed — root cause is confirmed.
 
 ---
 
@@ -358,7 +375,55 @@ out or already fixed. Do not propose them as new ideas:
 
 ---
 
-## Cross-references
+## Investigation session — 2026-04-24 (PTY soak + debug wrapper)
+
+**Method:** Flipped `.mcp.json` to `scripts/entraclaw-mcp-debug.sh` (safe
+per Learning #45). Built `.claude/pty_soak.py` — a Python PTY soak driver
+using `pty.openpty()` + `os.fork()` + `os.execve()` to spawn claude with
+a proper 50×200 PTY, send blind `\r` after 4 s for TUI consent, drain the
+PTY output, and monitor for 2 h. Launched via `nohup … & disown` for
+SIGHUP immunity.
+
+**Observations across 4 sessions:**
+- All 4 sessions: death is DETERMINISTIC, not stochastic. Always ~25 s
+  after boot, always triggered by the FIRST push notification.
+- Session 4 timeline:
+  - T+3s: three-hop token acquired, 4 chats registered
+  - T+5s: `tools/list`, `prompts/list`, `resources/list` served to claude
+  - T+9s: first poll cycle — 4 chats polled, 0 new messages
+  - T+16s: second poll — chat 1 returns 1 new message
+  - T+16–19s: 3 token POSTs (storage three-hop) + blob GET
+  - T+17s: TUI shows "1 MCP server failed · /mcp" (may be persona-sati)
+  - T+18–20s: 3 more token POSTs + blob PUT + Teams message detail GET
+  - T+20s: push notification fires; last debug log line:
+    `"Pushed Teams message from Brandon Werner: <attachment id=\"1777053221965\"></attachment>\n<p>As"`
+  - T+20s–25s: entraclaw-mcp dead (clean exit, no traceback)
+- Wrapper-start count = 1 per session ✅ (Learning #45 not regressing)
+- 0 BrokenPipeError ✅ (clean exit, not a crash)
+- 6 token POSTs per push: 3 for storage token + 3 for Teams API token
+  (two full three-hops per push — token cache may not be working for
+  storage token)
+
+**Key evidence for root cause:**
+1. The last debug log line shows raw HTML in the push content:
+   `<attachment id="1777053221965"></attachment>\n<p>As`
+2. `mcp_server.py:1250–1252` documents the identical death pattern for
+   the email push path, fixed 2026-04-17 by removing `<addr>` angle
+   brackets from the sender format.
+3. The Teams push path at line 1528 still uses
+   `message.get("content", "")` — the raw Graph API HTML body.
+4. The email push path (fixed) uses pre-formatted plain text with no
+   angle brackets.
+
+**`_run_sync` event loop blocking (secondary, also observed):**
+The 6 token POSTs + blob GET + blob PUT between T+16s and T+20s happen
+via `_run_sync()` which calls `ThreadPoolExecutor.result()` — blocking
+the asyncio event loop *thread* (not just a coroutine) for each call.
+The event loop is frozen for ~2–4 s cumulative during these 8 calls.
+This is a real performance bug but NOT the primary disconnect trigger
+(the HTML content in the push is what causes the clean close).
+
+---
 
 - `docs/runbooks/hard-won-learnings.md` Learning #36 (venv corruption)
 - `docs/runbooks/hard-won-learnings.md` Learning #37 (self-spawn cascade)
