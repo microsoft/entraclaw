@@ -2739,11 +2739,11 @@ async def _run_stdio_with_write_stream() -> None:
     async with stdio_server() as (read_stream, write_stream):
         _state["_write_stream"] = write_stream
 
-        # Install efferent-copy middleware before any tool dispatch runs.
-        # Discovery is schema-only — any peer that advertises an ``observe``
-        # tool with ``{tool_name: string, args: object}`` becomes a sink.
-        # Zero sinks → no wrapping, body behavior unchanged. Any discovery
-        # failure is swallowed: the body MUST keep working without sinks.
+        # Install opt-in efferent-copy middleware before any tool dispatch runs.
+        # With EFFERENT_COPY_ENABLE=1, schema-compatible peers advertising
+        # observe(tool_name, args[, result]) become sinks. Zero sinks means
+        # no wrapping and body behavior unchanged. Any discovery failure is
+        # swallowed: the body MUST keep working without sinks.
         try:
             sinks = await efferent_copy.discover_sinks()
             efferent_copy.install_into_fastmcp(mcp, sinks)

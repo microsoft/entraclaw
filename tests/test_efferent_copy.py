@@ -350,6 +350,36 @@ class TestDiscoverSinks:
         sinks = await ec.discover_sinks(tmp_path / "nope.json")
         assert sinks == []
 
+    async def test_default_disabled_does_not_contact_peers(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Efferent copy is opt-in so routine tool calls are not mirrored.
+
+        This protects disk-backed observer sinks from receiving pre/post
+        records for every MCP tool call unless the operator explicitly asks
+        for that behavior.
+        """
+        cfg = tmp_path / ".mcp.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "peer": {"type": "sse", "url": "http://localhost:9999/sse"}
+                    }
+                }
+            )
+        )
+        monkeypatch.delenv(ec.DISABLE_ENV, raising=False)
+        monkeypatch.delenv(ec.ENABLE_ENV, raising=False)
+
+        def failing_builder(peer):
+            raise AssertionError(f"default-disabled discovery contacted {peer!r}")
+
+        monkeypatch.setattr(ec, "_build_sink_factory", failing_builder)
+
+        sinks = await ec.discover_sinks(cfg)
+        assert sinks == []
+
     async def test_disable_env_short_circuits(self, tmp_path: Path, monkeypatch):
         # EFFERENT_COPY_DISABLE=1 skips registration entirely, regardless
         # of what's in .mcp.json.
@@ -364,6 +394,7 @@ class TestDiscoverSinks:
             )
         )
         monkeypatch.setenv(ec.DISABLE_ENV, "1")
+        monkeypatch.setenv(ec.ENABLE_ENV, "1")
 
         sinks = await ec.discover_sinks(cfg)
         assert sinks == []
@@ -384,6 +415,7 @@ class TestDiscoverSinks:
             )
         )
         monkeypatch.delenv(ec.DISABLE_ENV, raising=False)
+        monkeypatch.setenv(ec.ENABLE_ENV, "1")
 
         sinks = await ec.discover_sinks(cfg)
         assert sinks == []
@@ -400,6 +432,7 @@ class TestDiscoverSinks:
             )
         )
         monkeypatch.delenv(ec.DISABLE_ENV, raising=False)
+        monkeypatch.setenv(ec.ENABLE_ENV, "1")
 
         sinks = await ec.discover_sinks(cfg)
         assert sinks == []
@@ -437,6 +470,7 @@ class TestDiscoverSinks:
             )
         )
         monkeypatch.delenv(ec.DISABLE_ENV, raising=False)
+        monkeypatch.setenv(ec.ENABLE_ENV, "1")
 
         # Swap the factory builder so any attempt to open a stdio
         # session is visible as a test failure.
@@ -508,6 +542,7 @@ class TestDiscoverSinks:
             )
         )
         monkeypatch.delenv(ec.DISABLE_ENV, raising=False)
+        monkeypatch.setenv(ec.ENABLE_ENV, "1")
 
         # If the peer reaches the factory builder, that's a regression.
         factory_calls: list[dict] = []
@@ -707,6 +742,7 @@ class TestEndToEnd:
             )
         )
         monkeypatch.delenv(ec.DISABLE_ENV, raising=False)
+        monkeypatch.setenv(ec.ENABLE_ENV, "1")
 
         recorder = _RecorderSink("fakepeer")
         sink = recorder.as_sink()

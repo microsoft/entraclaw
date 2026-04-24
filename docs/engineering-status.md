@@ -2,7 +2,7 @@
 
 **Date:** April 24, 2026
 **Team:** Brandon Werner
-**Status:** v1 released. Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **652 tests** across the suite. MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat shipped. **Mind-body split complete** — body-first prompt architecture loads locally, persona-sati MCP wired for personality/memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped; blob-hosted operational storage is opt-in via `setup.sh --cloud-memory`. Efferent-copy middleware shipped and immediately hot-fixed for self-spawn cascade (PRs #35/#36), then hardened again against wrapper indirection (PR #41). Leader/slave gating ripped out per "one stdio client per process" reality. The "channel not rendering" symptom initially filed as a 2.1.117 regression resolved Apr 23 — root cause was a single-dash `-dangerously-load-development-channels` launch flag, not a Claude Code change. See Learning #39. The Apr 24 MCP disconnect was root-caused and fixed in `f0d29ea`: raw Teams Graph HTML in `notifications/claude/channel` content clean-closed Claude Code's MCP stream. The fix sanitizes top-level Teams push content and quoted-message metadata before pushing, verified by 65-minute and 30-minute real-channel soaks. See Learning #46.
+**Status:** v1 released. Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **654 tests** across the suite. MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat shipped. **Mind-body split complete** — body-first prompt architecture loads locally, persona-sati MCP wired for personality/memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped; blob-hosted operational storage is opt-in via `setup.sh --cloud-memory`. Efferent-copy middleware shipped and immediately hot-fixed for self-spawn cascade (PRs #35/#36), then hardened again against wrapper indirection (PR #41), and is now opt-in (`EFFERENT_COPY_ENABLE=1`) so normal MCP runs do not mirror every tool call. Leader/slave gating ripped out per "one stdio client per process" reality. The "channel not rendering" symptom initially filed as a 2.1.117 regression resolved Apr 23 — root cause was a single-dash `-dangerously-load-development-channels` launch flag, not a Claude Code change. See Learning #39. The Apr 24 MCP disconnect was root-caused and fixed in `f0d29ea`: raw Teams Graph HTML in `notifications/claude/channel` content clean-closed Claude Code's MCP stream. The fix sanitizes top-level Teams push content and quoted-message metadata before pushing, verified by 65-minute and 30-minute real-channel soaks. `entraclaw.log` now uses rotation instead of an unbounded file handler. See Learning #46.
 
 ---
 
@@ -24,11 +24,19 @@ No open high-severity runtime issues at this snapshot.
 
 **Verification.** Focused tests passed, full suite passed with `ENTRACLAW_KEEP_MEMORY_LOCAL=true` (`652 passed`), `ruff check .` passed, a 65-minute real Claude Code channel soak survived the original raw-HTML crash trigger, and a follow-up 30-minute quote-reply soak verified sanitized quoted-message metadata.
 
+### Per-tool observe mirroring and log file growth
+
+**Status:** Fixed Apr 24, 2026. Efferent-copy discovery is now opt-in via `EFFERENT_COPY_ENABLE=1`; the existing `EFFERENT_COPY_DISABLE=1` remains a hard override. Default MCP boots register zero observer sinks and do not wrap every tool call.
+
+**Disk guard.** `src/entraclaw/logging_config.py` now uses a rotating JSON file handler for `~/.entraclaw/logs/entraclaw.log` instead of an unbounded `FileHandler`.
+
+**Verification.** Full suite passed with `ENTRACLAW_KEEP_MEMORY_LOCAL=true` (`654 passed`), and `ruff check .` passed.
+
 ---
 
 ## What's New Apr 24 — MCP logging + wrapper hardening
 
-Two PRs merged Apr 24 targeting the MCP-disconnect symptom. Both were amplifier fixes, both reduced the drop frequency, neither eliminated it. See the "Known Issues" section above and `docs/runbooks/mcp-disconnect-investigation.md` for the full dossier.
+Two PRs merged Apr 24 targeting the MCP-disconnect symptom. Both were amplifier fixes, both reduced the drop frequency, neither eliminated it. The remaining root cause was fixed later the same day; see "Recently Resolved" and `docs/runbooks/mcp-disconnect-investigation.md` for the full dossier.
 
 **PR #40 — stop entraclaw records propagating to root** (commit `9c74cd1`). `src/entraclaw/logging_config.py` sets `logger.propagate = False`. FastMCP's `configure_logging()` had attached a `RichHandler` to the root logger via `basicConfig`; every entraclaw record was rendering twice on stderr (JSON + rich) and doubling the byte volume the parent Claude CLI had to drain. Added `tests/conftest.py` with an autouse fixture that attaches `caplog.handler` directly to the entraclaw logger per test, because `caplog` attaches to root and with propagation off would have lost visibility of entraclaw records. Ships with TDD tests in `tests/test_logging_config.py`. Also removed 4 throttling-sleep tests that were pushing the suite past Bash 300s timeout; unrelated to runtime behavior.
 

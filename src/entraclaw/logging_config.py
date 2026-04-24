@@ -11,8 +11,12 @@ import json
 import logging
 import sys
 from datetime import UTC, datetime
+from logging.handlers import RotatingFileHandler
 
 from entraclaw.config import get_config
+
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUP_COUNT = 3
 
 
 class _JSONFormatter(logging.Formatter):
@@ -56,7 +60,11 @@ def setup_logging() -> logging.Logger:
     # File handler — create log directory lazily
     try:
         cfg.log_dir.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(cfg.log_dir / "entraclaw.log")
+        file_handler = RotatingFileHandler(
+            cfg.log_dir / "entraclaw.log",
+            maxBytes=LOG_MAX_BYTES,
+            backupCount=LOG_BACKUP_COUNT,
+        )
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
     except OSError:

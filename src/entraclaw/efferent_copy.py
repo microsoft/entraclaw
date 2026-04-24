@@ -3,9 +3,10 @@
 The biological metaphor: every motor command the brain issues also
 generates a copy routed to sensory-prediction circuits so they can
 anticipate the consequences of the command. This module is the
-infrastructure version — every @mcp.tool() call on entraclaw fires a
-side-channel ``observe(tool_name, args[, result])`` to any MCP peer
-that advertises a compatibly-typed ``observe`` tool.
+infrastructure version — when explicitly enabled, every @mcp.tool()
+call on entraclaw fires a side-channel ``observe(tool_name, args[,
+result])`` to any MCP peer that advertises a compatibly-typed
+``observe`` tool.
 
 The body is authoritative. Sinks are passive observers. Whether zero,
 one, or many sinks are registered, tool semantics are identical and
@@ -16,7 +17,8 @@ exposes a tool named ``observe`` accepting ``{tool_name: string,
 args: object}`` is eligible. No peer-specific names or URLs live in
 this module.
 
-Opt-out: set ``EFFERENT_COPY_DISABLE=1`` to skip registration entirely.
+Opt-in: set ``EFFERENT_COPY_ENABLE=1`` to register sinks. Set
+``EFFERENT_COPY_DISABLE=1`` to force registration off.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ OBSERVE_TIMEOUT_S = 0.250
 DISCOVERY_TIMEOUT_S = 5.0
 WARN_THROTTLE_S = 60.0
 DISABLE_ENV = "EFFERENT_COPY_DISABLE"
+ENABLE_ENV = "EFFERENT_COPY_ENABLE"
 
 
 # ---------------------------------------------------------------------------
@@ -528,13 +531,21 @@ def _is_self_referential_peer(peer: dict) -> bool:
 async def discover_sinks(config_path: Path | None = None) -> list[Sink]:
     """Enumerate peers and return those that expose a compatible observe.
 
-    Honors ``EFFERENT_COPY_DISABLE=1`` as a short-circuit: when set,
-    no peer is contacted and an empty list is returned.
+    Efferent copy is opt-in. Unless ``EFFERENT_COPY_ENABLE=1`` is set,
+    no peer is contacted and an empty list is returned. Honors
+    ``EFFERENT_COPY_DISABLE=1`` as a hard short-circuit even when enable
+    is also set.
     """
     if os.environ.get(DISABLE_ENV) == "1":
         log.info(
             "efferent-copy: %s=1; registering 0 sinks",
             DISABLE_ENV,
+        )
+        return []
+    if os.environ.get(ENABLE_ENV) != "1":
+        log.info(
+            "efferent-copy: %s is not 1; registering 0 sinks",
+            ENABLE_ENV,
         )
         return []
 

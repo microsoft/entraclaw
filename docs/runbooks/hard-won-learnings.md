@@ -572,6 +572,18 @@ Regression tests in `tests/test_mcp_server_integration.py` cover both raw Teams 
 
 ---
 
+### Learning #47: Per-Tool Observe Mirroring Must Be Opt-In and File Logs Must Rotate
+
+**Date:** 2026-04-24
+**Status:** **CONFIRMED + FIXED — efferent-copy now opt-in; JSON file log now rotates.**
+**Context:** After the MCP disconnect was fixed, Brandon asked whether entraclaw was still wrapping every call with logging and flagged disk-fill risk. The answer was yes for efferent-copy: when sinks were discovered, `install_into_fastmcp()` wrapped every MCP tool with pre/post `observe(...)` calls. Separately, `setup_logging()` used a plain `logging.FileHandler` for `~/.entraclaw/logs/entraclaw.log`, which can grow forever.
+**Problem:** Per-call observer mirroring is useful diagnostic/cognition plumbing, but it is too expensive as a default. Any sink that persists observations can turn normal MCP usage into unbounded write amplification. The main JSON log also had no size cap, so long-running MCP sessions could fill disk even without observer sinks.
+**Fix:** Efferent-copy discovery is now off by default and only runs when `EFFERENT_COPY_ENABLE=1` is set. `EFFERENT_COPY_DISABLE=1` remains a hard override, including for spawned stdio peers. `setup_logging()` now uses `RotatingFileHandler` for `entraclaw.log` instead of an unbounded `FileHandler`.
+**Prevention:** (1) Treat whole-tool-call mirroring as an explicit diagnostic or cognition feature, never a default runtime behavior. (2) Any log written by a daemon-style MCP process must have a bounded retention policy. (3) Keep security/audit logging separate from optional observer mirroring; disabling efferent-copy must not disable audit events or interaction logging required for product behavior.
+**Evidence/references:** `src/entraclaw/efferent_copy.py::discover_sinks`, `src/entraclaw/logging_config.py::setup_logging`, `tests/test_efferent_copy.py::TestDiscoverSinks::test_default_disabled_does_not_contact_peers`, and `tests/test_logging_config.py::TestSetupLogging::test_file_handler_rotates_to_cap_disk_usage`.
+
+---
+
 ## Historical Learnings
 
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
