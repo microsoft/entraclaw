@@ -181,7 +181,8 @@ Two memory systems coexist in this project:
 - `docs/architecture/DESIGN-teams-bot-gateway.md` — Bot Gateway design
 - `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` — delegated mode spec (landed)
 - `docs/index.md` — doc site entry point
-- `docs/runbooks/hard-won-learnings.md` — 29 learnings, read before making changes
+- `docs/runbooks/mcp-disconnect-investigation.md` — **OPEN issue.** Entraclaw MCP dies after 2–10 min of sustained activity. Two amplifiers fixed (PR #40, PR #41), root cause still unknown. Read this before debugging any MCP-drop symptom — do NOT restart the investigation from scratch.
+- `docs/runbooks/hard-won-learnings.md` — 46 learnings, read before making changes
 - `docs/decisions/001-obo-flows-for-device-agents.md`
 - `docs/decisions/003-certificate-auth-over-client-secrets.md`
 - `docs/platform-learnings/mcp-close-the-loop.md`
@@ -221,7 +222,8 @@ pip install mkdocs-material && mkdocs serve
 - `src/entraclaw/mcp_server.py`: FastMCP server — Teams tools + 3 auth modes + background poll + channel push + token refresh (generic instructions — personality in persona-sati)
 - `src/entraclaw/config.py`: `ENTRACLAW_MODE` switch (auto/bot/delegated/agent_user) + all env config
 - `docs/decisions/`: ADRs — every significant architectural choice is recorded here
-- `docs/runbooks/hard-won-learnings.md`: 29 hard-won learnings — READ THIS before making changes
+- `docs/runbooks/hard-won-learnings.md`: 46 hard-won learnings — READ THIS before making changes
+- `docs/runbooks/mcp-disconnect-investigation.md`: OPEN MCP-disconnect dossier — READ before touching MCP transport, logging, or efferent-copy code
 
 ## gstack
 

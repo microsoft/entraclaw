@@ -1,8 +1,49 @@
 # Entraclaw Identity Research — Engineering Summary
 
-**Date:** April 22, 2026
+**Date:** April 24, 2026
 **Team:** Brandon Werner
-**Status:** v1 released. Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **~618 tests** across the suite. MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat shipped. **Mind-body split complete** — body-first prompt architecture loads locally, persona-sati MCP wired for personality/memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped; blob-hosted operational storage is opt-in via `setup.sh --cloud-memory`. Efferent-copy middleware shipped and immediately hot-fixed for self-spawn cascade (PRs #35/#36). Leader/slave gating ripped out per "one stdio client per process" reality. The "channel not rendering" symptom initially filed as a 2.1.117 regression resolved Apr 23 — root cause was a single-dash `-dangerously-load-development-channels` launch flag, not a Claude Code change. See Learning #39.
+**Status:** v1 released. Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **~618 tests** across the suite. MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat shipped. **Mind-body split complete** — body-first prompt architecture loads locally, persona-sati MCP wired for personality/memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped; blob-hosted operational storage is opt-in via `setup.sh --cloud-memory`. Efferent-copy middleware shipped and immediately hot-fixed for self-spawn cascade (PRs #35/#36), then hardened again against wrapper indirection (PR #41). Leader/slave gating ripped out per "one stdio client per process" reality. The "channel not rendering" symptom initially filed as a 2.1.117 regression resolved Apr 23 — root cause was a single-dash `-dangerously-load-development-channels` launch flag, not a Claude Code change. See Learning #39. **Known issue (open):** entraclaw MCP child still drops out of its parent Claude CLI after 2–10 minutes of sustained activity. Amplifiers fixed in PR #40 + PR #41; underlying symptom reduced but not eliminated. See `docs/runbooks/mcp-disconnect-investigation.md` and Learning #46 before debugging further.
+
+---
+
+## Known Issues (Open)
+
+### Entraclaw MCP disconnects after minutes of sustained activity
+
+**Status:** Open since 2026-04-24. Two amplifiers fixed and merged; symptom reduced but not eliminated. Not yet root-caused.
+
+**Read before debugging:** `docs/runbooks/mcp-disconnect-investigation.md` (the living dossier) and `docs/runbooks/hard-won-learnings.md` Learning #46. **Do not restart the investigation from scratch** — five regressions (#36, #37, #38, #39, #45) have already happened against this exact symptom shape and each one took hours to unwind. The runbook has a "DO NOT re-investigate" section with the full ruled-out list.
+
+**Symptom.** The MCP stdio child of the Claude Code CLI becomes progressively slower, then disconnects, typically within 2–10 minutes of active use (Teams DMs, email poll, daily summary). First 1–3 tool calls return <1s; later ones stall 5–60s; `/mcp` shows disconnected; manual reconnect respawns and the cycle repeats. **Child is reaped, not crashed** — zero Python tracebacks on the parent MCP process at the drop, `entraclaw.log` stops at the cutoff. Parent Claude CLI at 27–83% CPU / ~800 MB–1 GB RSS while entraclaw is active.
+
+**Tried and merged (did not eliminate symptom):**
+- **PR #40 (`9c74cd1`) — `logger.propagate = False` on the `entraclaw` logger.** Stopped records from double-rendering through FastMCP's root `RichHandler`. Halved entraclaw-originated stderr volume the parent CLI has to drain. Does not silence `httpx.*` / `msal.*` (follow-up open).
+- **PR #41 (`fc2e49b`) — self-ref marker on wrapper scripts.** Wrapper-named `command` in `.mcp.json` had been bypassing `_is_self_referential_peer` and retriggering the self-spawn cascade from Learning #37 at 1-child-deep (twin-spawn). Wrappers now carry `# entraclaw-self-ref-target: <path>` markers; check reads the script and matches declared target against our entry point.
+- **Removed 4 slow throttling tests.** Suite-speed cleanup, not runtime-symptom fix.
+
+**Leading hypothesis.** Parent Claude CLI stdio-drain backpressure. When entraclaw emits bursts during a Teams push, the CLI's render path (SSE to API, markdown repaint, tool-schema validation) saturates — CPU climbs, stdout pipe stops draining, CLI eventually reaps the child. Zero child tracebacks + sustained parent CPU + "fast, slow, gone" shape all fit.
+
+**Secondary hypothesis.** Blob-write-on-push hot path. Every inbound Teams push does 3–5 synchronous HTTPS round-trips (token + blob GET + blob PUT) before the push returns. Under bursts, serial I/O can pin an event-loop task, delay the `notifications/claude/channel` push, and cause the parent to time out.
+
+**What to try next** (full detail in the runbook):
+1. Flip `.mcp.json` to the wrapper (safe since PR #41) to re-enable `/tmp/entraclaw-debug.log` capture, measure stderr rate.
+2. Silence `httpx` and `msal` via `propagate=False` or root-level `WARNING`.
+3. Add `perf_counter` spans around blob I/O on the push path; if hot, decouple via asyncio queue.
+4. Run entraclaw under SSE transport instead of stdio; if drops disappear, CLI backpressure is confirmed.
+5. `py-spy dump` (Node devtools for the CLI) mid-drop.
+6. File upstream against Claude Code if SSE is clean and stdio is not.
+
+---
+
+## What's New Apr 24 — MCP logging + wrapper hardening
+
+Two PRs merged Apr 24 targeting the MCP-disconnect symptom. Both were amplifier fixes, both reduced the drop frequency, neither eliminated it. See the "Known Issues" section above and `docs/runbooks/mcp-disconnect-investigation.md` for the full dossier.
+
+**PR #40 — stop entraclaw records propagating to root** (commit `9c74cd1`). `src/entraclaw/logging_config.py` sets `logger.propagate = False`. FastMCP's `configure_logging()` had attached a `RichHandler` to the root logger via `basicConfig`; every entraclaw record was rendering twice on stderr (JSON + rich) and doubling the byte volume the parent Claude CLI had to drain. Added `tests/conftest.py` with an autouse fixture that attaches `caplog.handler` directly to the entraclaw logger per test, because `caplog` attaches to root and with propagation off would have lost visibility of entraclaw records. Ships with TDD tests in `tests/test_logging_config.py`. Also removed 4 throttling-sleep tests that were pushing the suite past Bash 300s timeout; unrelated to runtime behavior.
+
+**PR #41 — wrapper self-ref marker** (commit `fc2e49b`). `src/entraclaw/efferent_copy.py::_is_self_referential_peer` now detects wrapper scripts via an opt-in `# entraclaw-self-ref-target: <path>` marker comment. Reads up to 16 KB of the script, parses the marker, matches the declared target against `sys.argv[0]` / `sys.executable`. `scripts/entraclaw-mcp-debug.sh` carries the marker. Prevents the PR #36 self-spawn cascade regressing when `.mcp.json`'s `command` is swapped to a wrapper for stderr capture. See Learning #45 for the full post-mortem.
+
+**Why this didn't fix the drops entirely.** Both PRs addressed secondary amplifiers, not the primary drain. The parent Claude CLI's stdio consumption remains the leading suspect. See the runbook's "What to try next" for the queue-decouple and SSE-transport experiments.
 
 ---
 
