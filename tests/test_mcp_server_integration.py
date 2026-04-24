@@ -1072,6 +1072,44 @@ class TestPushChannelNotificationObservability:
         ), f"Expected inbound group entry for m-grp-1, got: {inbound}"
 
     @pytest.mark.asyncio
+    async def test_channel_notification_content_strips_teams_html(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Teams Graph bodies include HTML that can close Claude's MCP stream.
+
+        The channel notification content must be plain text. Keep rich Teams
+        metadata in meta, but do not pass raw ``<attachment>`` or ``<p>`` tags
+        through the top-level content field.
+        """
+        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+
+        from entraclaw import mcp_server
+
+        mock_stream = AsyncMock()
+        mcp_server._state["_write_stream"] = mock_stream
+        try:
+            await mcp_server._push_channel_notification(
+                {
+                    "message_id": "m-html-1",
+                    "from": "Brandon",
+                    "content": '<attachment id="SRC-1"></attachment><p>As</p>',
+                    "sent_at": "2026-04-24T20:00:00Z",
+                },
+                chat_id="19:abc@unq.gbl.spaces",
+            )
+        finally:
+            mcp_server._state.pop("_write_stream", None)
+
+        mock_stream.send.assert_awaited_once()
+        notif_params = mock_stream.send.call_args.args[0].message.root.params
+        content = notif_params["content"]
+        assert content == "As"
+        assert "<" not in content
+        assert ">" not in content
+        assert "attachment" not in content
+        assert "</p>" not in content
+
+    @pytest.mark.asyncio
     async def test_reply_to_ids_forwarded_into_meta(
         self, tmp_path, monkeypatch
     ) -> None:
@@ -1187,6 +1225,10 @@ class TestPushChannelNotificationObservability:
         assert len(quoted) == 2
         assert {q["message_id"] for q in quoted} == {"SRC-A", "SRC-B"}
         assert all(q["from"] == "EntraClaw Agent" for q in quoted)
+        for q in quoted:
+            assert "<" not in q["content"], f"Raw HTML in quoted content: {q['content']!r}"
+            assert ">" not in q["content"], f"Raw HTML in quoted content: {q['content']!r}"
+            assert q["content"] == f"orig {q['message_id']}"
 
     @pytest.mark.asyncio
     async def test_failed_fetches_omitted_from_quoted_messages(

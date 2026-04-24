@@ -1520,14 +1520,14 @@ async def _push_channel_notification(
                         )
                     continue
                 if r is not None:
-                    quoted.append(r)
+                    quoted.append({**r, "content": _summarize_content(r.get("content", ""))})
         meta["quoted_messages"] = quoted
 
     notification = JSONRPCNotification(
         jsonrpc="2.0",
         method="notifications/claude/channel",
         params={
-            "content": message.get("content", ""),
+            "content": _summarize_content(message.get("content", "")),
             "meta": meta,
         },
     )
