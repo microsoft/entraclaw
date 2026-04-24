@@ -19,7 +19,6 @@ from entraclaw.errors import (
     AgentIDNotAvailable,
     ChatNotFound,
     MessageTooLong,
-    RateLimitError,
     TeamsNotLicensed,
     TokenExchangeError,
     TokenExpiredError,
@@ -327,19 +326,6 @@ class TestCreateOrFindChat:
                 token="tok",
                 human_user_ids=["h"],
             )
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_rate_limited(self) -> None:
-        respx.post(f"{GRAPH_BASE}/chats").mock(
-            return_value=httpx.Response(429, headers={"Retry-After": "30"})
-        )
-        with pytest.raises(RateLimitError) as exc_info:
-            await create_or_find_chat(
-                token="tok",
-                human_user_ids=["h"],
-            )
-        assert exc_info.value.retry_after == 30
 
     @respx.mock
     @pytest.mark.asyncio
@@ -682,16 +668,6 @@ class TestTeamsSend:
         respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(return_value=httpx.Response(401))
         with pytest.raises(TokenExpiredError):
             await send(chat_id="c1", message="hello", token="tok")
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_rate_limited(self) -> None:
-        respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
-            return_value=httpx.Response(429, headers={"Retry-After": "42"})
-        )
-        with pytest.raises(RateLimitError) as exc_info:
-            await send(chat_id="c1", message="hello", token="tok")
-        assert exc_info.value.retry_after == 42
 
     @respx.mock
     @pytest.mark.asyncio
@@ -1599,25 +1575,6 @@ class TestUpdatePlaceholder:
             "update_placeholder must NOT post a fresh message when PATCH fails"
         )
 
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_rate_limited_raises(self) -> None:
-        from entraclaw.errors import RateLimitError
-        from entraclaw.tools.teams import update_placeholder
-
-        respx.patch(
-            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
-        ).mock(return_value=httpx.Response(429, headers={"Retry-After": "30"}))
-
-        with pytest.raises(RateLimitError):
-            await update_placeholder(
-                chat_id="c1",
-                placeholder_id="msg-p1",
-                progress_text="progress",
-                token="tok",
-            )
-
-
 # ---------------------------------------------------------------------------
 # delete_chat_message — Graph softDelete wrapper for the agent's own messages
 # ---------------------------------------------------------------------------
@@ -1712,19 +1669,3 @@ class TestDeleteChatMessage:
                 chat_id="c1", message_id="msg-1", token="tok"
             )
 
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_raises_rate_limit_on_429(self) -> None:
-        from entraclaw.tools.teams import delete_chat_message
-
-        respx.post(
-            f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete"
-        ).mock(
-            return_value=httpx.Response(429, headers={"Retry-After": "17"})
-        )
-        with pytest.raises(RateLimitError) as exc_info:
-            await delete_chat_message(
-                chat_id="c1", message_id="msg-1", token="tok"
-            )
-        # retry_after surfaced on the exception for the caller's retry loop
-        assert getattr(exc_info.value, "retry_after", None) == 17

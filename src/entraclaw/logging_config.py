@@ -45,6 +45,12 @@ def setup_logging() -> logging.Logger:
 
     logger.setLevel(getattr(logging, cfg.log_level.upper(), logging.INFO))
 
+    # FastMCP's configure_logging attaches a RichHandler to the root logger via
+    # basicConfig. Without this, every entraclaw record would propagate to root
+    # and surface as a rich-formatted stderr line on top of our JSON output,
+    # doubling the volume the parent MCP client has to drain.
+    logger.propagate = False
+
     formatter = _JSONFormatter()
 
     # File handler — create log directory lazily
