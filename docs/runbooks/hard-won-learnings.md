@@ -382,6 +382,142 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 
 ---
 
+### Learning #40: Entra Agent Users Cannot Silently Federate to External OIDC RPs Without a User-Level Credential
+
+**Date:** 2026-04-24
+**Status:** **RESEARCH FINDING, applied as Phase 0 pivot in GitHub OIDC federation design.**
+**Context:** Phase 0 kill-gate spike for the "Agent User → GitHub Copilot via OIDC" design. Original design (Approach B) assumed a 4th hop using `grant_type=urn:ietf:params:oauth:grant-type:token-exchange` would mint an id_token with `aud=<github-oidc-client-id>` for the Agent User.
+**Problem:** Approach B is architecturally impossible, and the fallback of priming `/authorize?prompt=none` with `id_token_hint` does not work for a user who has never interactively signed in. The Agent User has a Blueprint cert (authorizes the 3-hop impersonation chain) but no credential that Entra accepts at the `/authorize` sign-in page.
+**Investigation done:**
+1. Five variants of Hop 4 probed via `/tmp/spike_hop4_variants.py`. All failed: AADSTS70003 (token-exchange unsupported), AADSTS70025 (GitHub gallery app has no FICs), AADSTS50013 (jwt-bearer signature validation when T3 used as assertion), AADSTS65001 (consent missing for mixed scope). The only 200 OK was `user_fic + scope=openid` which returned an id_token with `oid=<agent_user>` but `aud=<agent_identity>` (not GitHub).
+2. Microsoft docs confirm: [agent-oauth-protocols](https://learn.microsoft.com/en-us/entra/agent-id/agent-oauth-protocols) explicit list of supported grant types for Agent Identity is `client_credentials, jwt-bearer, refresh_token`. No token-exchange. [agent-user-oauth-flow](https://learn.microsoft.com/en-us/entra/agent-id/agent-user-oauth-flow) specifies the Agent User flow as exactly 3 hops ending at a Microsoft resource.
+3. Id_token audience is always `client_id of the requester`; external `aud` only happens when the external app is the OAuth client making the `/authorize` call.
+4. Q2 spike (`/tmp/spike_q2_id_token_hint.py`) confirmed AADSTS50058 — `id_token_hint` is a session-lookup hint, not a session-creation primer.
+**Root cause:** The conceptual error was conflating "Agent User has no password" with "Agent User has no credential." The Blueprint cert is a credential registered on the Blueprint *application* for client_credentials authentication of the impersonation chain. It does NOT authorize the Agent User to present itself at an OIDC sign-in ceremony — that requires a credential registered on the Agent User's own directory object.
+**The pivot (Phase 0B):** The Agent User model needs *two* credentials:
+1. **Blueprint cert** (existing) — authorizes the 3-hop impersonation chain for API-layer tokens
+2. **Agent User Sign-In Cert** (new) — registered on the Agent User's directory entry via Entra Certificate-Based Authentication (CBA). Presented via TLS client-cert at `/authorize`, Entra validates against the registered CA chain, matches Subject/SAN to the Agent User's UPN, sets ESTSAUTH. From there, OIDC federation to external RPs (GitHub) works normally.
+CBA is a production Entra feature (GA) used by government and regulated industries. Nothing custom; we're applying a shipped Entra primitive to Agent User accounts. The research contribution becomes: "Agent User portability across OIDC-federated SaaS via user-level CBA certs."
+**Prevention (for next time):** (1) When designing OIDC federation flows, identify the `/authorize` credential source FIRST. "A credential is a credential" — but the credential must be registered on the identity that's signing in, not on a chained impersonator. (2) Do not assume a new grant type exists because it would be convenient. Verify in Microsoft docs (`/entra/identity-platform/v2-*` pages) before building around it. (3) The Agent User protocol is explicitly 3 hops per Microsoft's own docs; any design assuming Hop 4 needs to name the grant type and verify its existence. (4) Before burning spike cycles on a custom federation path, check whether the identity's `/authorize` credential exists. If the identity is passwordless AND has no FIDO2/CBA/TAP registered, OIDC federation to external RPs is not possible until one is provisioned.
+**Evidence/references:** `/tmp/spike_hop4.py`, `/tmp/spike_hop4_variants.py`, `/tmp/spike_q2_id_token_hint.py` (local, non-committed); `~/.gstack/projects/brandwe-entraclaw-identity-research/brandonwerner-main-design-20260423-183328.md` "Phase 0 Findings & Pivot to CBA" section (full findings); [Microsoft Entra Agent ID OAuth protocols doc](https://learn.microsoft.com/en-us/entra/agent-id/agent-oauth-protocols); [Microsoft Entra Agent User OAuth flow doc](https://learn.microsoft.com/en-us/entra/agent-id/agent-user-oauth-flow).
+**See also:** Learning #41 (the CBA pivot we tried next — also blocked by design).
+
+---
+
+### Learning #41: Entra `agentUser` Subtype Architecturally Blocks ALL Interactive Authentication Credentials
+
+**Date:** 2026-04-24 (same evening as #40)
+**Status:** **DEFINITIVE BLOCK, research finding applied as Phase 0B outcome.**
+**Context:** After Learning #40, we pivoted the GitHub OIDC federation design to use Entra Certificate-Based Authentication (CBA) on the Agent User. Hypothesis: the Agent User has no password but could have a cert registered on its directory object, which Entra would accept at `/authorize` TLS client-cert time, establishing an ESTSAUTH session. From there the OIDC dance to GitHub would complete normally.
+**Problem:** Tenant CBA + root CA upload + user cert generation with correct UPN-bound SANs (PrincipalName + RFC822Name) all succeeded. But `POST /common/GetCredentialType` — the exact API Entra's sign-in page uses to decide what credentials to offer — returns for the Agent User: `{"HasPassword": true, "CertAuthParams": null, "FidoParams": null, "RemoteNgcParams": null, "SasParams": null}`. CBA not offered. FIDO2 not offered. Windows Hello not offered. TAP not offered. Only password, which has no value set (passwordless by design) = unusable.
+**Investigation done:**
+1. Admin consent obtained for `Policy.ReadWrite.AuthenticationMethod`, `Organization.ReadWrite.All`, `UserAuthenticationMethod.ReadWrite.All` (provisioner app, werner.ac tenant).
+2. Root CA uploaded to `/beta/organization/{tenantId}/certificateBasedAuthConfiguration` — 201 Created. Note: the `issuer` property is read-only on POST, Entra derives it from the cert itself.
+3. Tenant CBA policy enabled: `/beta/policies/authenticationMethodsPolicy/authenticationMethodConfigurations/X509Certificate` PATCH to `state=enabled`, includeTargets=all_users. 204 success.
+4. User cert generated with both `otherName:1.3.6.1.4.1.311.20.2.3;UTF8:<upn>` (PrincipalName) and `email:<upn>` (RFC822Name) SANs for maximum binding coverage.
+5. Attempted to register cert on Agent User via three beta endpoints; all returned 400 "Resource not found for the segment":
+   - `/users/{id}/authentication/x509CertificateMethods`
+   - `/users/{id}/authentication/certificateBasedAuthConfiguration`
+   - `/users/{id}/authentication/certificateBasedAuthMethods`
+6. Attempted to set `authorizationInfo.certificateUserIds` on the Agent User; PATCH returned 400 "Property is not applicable and cannot be set. paramName: CertificateUserIds, paramValue: , objectType: Microsoft.Online.DirectoryServices.User".
+7. Attempted to add a CBA user-binding rule `PrincipalName → userPrincipalName` to the tenant policy; PATCH returned 400 "One X509CertificateField: PrincipalName cannot bind to different userProperty fields." (existing rule already maps PrincipalName to onPremisesUserPrincipalName, which is null for cloud-only agentUsers).
+8. Crucial diagnostic: `POST /common/GetCredentialType` returns CertAuthParams=null, FidoParams=null, RemoteNgcParams=null, SasParams=null for the Agent User's UPN. This confirms Entra's sign-in page itself wouldn't offer CBA to this user regardless of any other config.
+**Root cause:** The `#microsoft.graph.agentUser` directory subtype is **architecturally excluded from all interactive authentication credential types**. Microsoft has intentionally scoped the Agent User primitive to non-interactive API-layer impersonation (the 3-hop chain). There is no credential — cert, FIDO2 key, Windows Hello, TAP, password — that can authenticate an agentUser object interactively. This forecloses BOTH of the research thesis's required primitives: (a) no external-audience token minting via `/token` endpoint (Learning #40), and (b) no interactive credential for `/authorize` ESTSAUTH session establishment (Learning #41).
+**The research contribution crystallizes:** The Entra Agent User primitive as shipped cannot participate in OIDC sign-in to third-party SaaS requiring SP-initiated auth. Microsoft would need to extend the protocol with either: (a) a Hop-4 grant minting id_tokens with external audiences, or (b) permitting at least one interactive credential type on agentUser objects to complete standard OIDC auth. Both are concrete, narrow feature requests for the Entra platform team.
+**Prevention (for next time):** (1) Before designing identity federation that requires interactive sign-in, verify the identity subtype supports at least one credential type via `POST /common/GetCredentialType`. This single API call forecloses entire categories of dead-end designs. (2) `agentUser` subtype ≠ regular `user` — many directory-object properties and auth method endpoints that apply to `user` fail silently or reject writes on `agentUser`. Always test writes on the exact subtype before building. (3) Tenant-level CBA enablement is necessary but NOT sufficient — per-user credential-type availability is a separate gate that the `GetCredentialType` API surfaces. Silent passing tenant-level checks can mask per-user exclusions.
+**Evidence/references:** `/tmp/spike_phase0b_cba_auth.py`, `/tmp/run_phase0b_setup.py` (local, non-committed); `~/.gstack/projects/brandwe-entraclaw-identity-research/brandonwerner-main-design-20260423-183328.md` "Phase 0B Findings: CBA Also Blocked for agentUser Type" section (full evidence + tenant state + rollback commands); GetCredentialType response captured verbatim in that section.
+**CORRECTION applied same evening — see Learning #42:** Learnings #40 and #41 together say "Agent User federation to external RPs is architecturally impossible." That framing was too broad. It is correct for OIDC (proved here and in #40), but Microsoft ships a preview SAML-shaped four-hop flow for the same capability (agent-user → SAML helper app → OBO with `requested_token_type=saml2` → SAML assertion). Missed this in the initial spikes because we were OIDC-focused. The corrected framing is an OIDC-SAML asymmetry, not a total block.
+
+---
+
+### Learning #42: Microsoft's Agent User → SAML Application Preview Flow Is the Missing "Hop 4" We Claimed Didn't Exist
+
+**Date:** 2026-04-24 (correction, same evening as #40 and #41)
+**Status:** **DOCUMENTED PREVIEW, PENDING EMPIRICAL VALIDATION (Phase 0C spike).**
+**Context:** After Learnings #40 and #41 documented the OIDC + CBA blocks and concluded "Agent Users cannot federate to external RPs," a cross-model challenge (ChatGPT) correctly identified that Microsoft ships a documented preview feature we hadn't probed: an agent-user-to-SAML-application four-hop flow that mints SAML assertions on behalf of agent users for external SAML-based applications.
+**Problem:** Learning #40 + #41's framing was over-general. The OIDC conclusion remains correct (no token-exchange grant on Entra's /token endpoint mints id_tokens with external audiences; all variants probed returned specific AADSTS error codes). But the broader claim — "the agent user primitive architecturally forecloses external federation" — is wrong. Microsoft ships the primitive in SAML shape; the OIDC equivalent is the gap.
+**The corrected mental model:**
+
+Microsoft's agent-user-to-SAML-app flow, from `learn.microsoft.com/entra/identity/enterprise-apps/assign-agent-identities-to-applications#assigning-to-saml-based-applications`:
+
+```
+Hop 1:  Blueprint → blueprint token (unchanged from today's 3-hop)
+Hop 2:  Agent Identity FIC token with T1 as assertion (unchanged)
+Hop 3:  Agent User user_fic scoped to SAML HELPER APP (not Graph)
+Hop 4:  POST /oauth2/v2.0/token
+        grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer
+        assertion=<Hop 3 token>
+        client_id=<SAML helper app>
+        client_secret=<SAML helper app secret>
+        scope=<target enterprise app ID>/.default
+        requested_token_use=on_behalf_of
+        requested_token_type=urn:ietf:params:oauth:token-type:saml2
+        → base64url-encoded SAML assertion in response
+```
+
+Required tenant artifacts (all in preview, documented):
+- SAML helper application registration
+- Target enterprise application (the external SAML RP, e.g., GitHub EMU in SAML mode)
+- oAuth2PermissionGrant: SAML helper → target enterprise app, scope=`<enterprise entity ID>/.default`
+- oAuth2PermissionGrant: agent identity → SAML helper, scope=`api://<helper>/.default`
+- App role assignment: agent user → target enterprise app role
+- (The agent identity blueprint, agent identity, and agent user already exist)
+
+This is exactly the "Hop 4" primitive Learning #40 claimed didn't exist. It produces a SAML assertion rather than an OIDC id_token, which is why OIDC-focused probing missed it.
+
+**What this changes:**
+- Learning #40 stays correct as bound to OIDC specifically: token-exchange is unsupported, no OIDC grant mints external-audience id_tokens.
+- Learning #41 stays correct: agentUser subtype blocks all interactive credentials for `/authorize` sign-in.
+- BUT the combined research conclusion narrows: "OIDC federation is blocked; SAML federation has a Microsoft-documented preview path that is the Hop-4 equivalent we were looking for."
+- Feature request to Microsoft refocuses on the asymmetry: productize the SAML primitive + add the OIDC equivalent.
+
+**Pending validation (Phase 0C spike):**
+- Register a SAML helper app + dummy target SAML enterprise app in werner.ac
+- Run the 4 hops, inspect the returned SAML assertion (issuer, audience, NameID, signature, conditions)
+- Test whether the emitted bare `<Assertion>` can be packaged into a GitHub-acceptable `<samlp:Response>` envelope (InResponseTo-absent per Microsoft caveat)
+- Decide whether to migrate GitHub EMU from OIDC to SAML (disruptive — GHEC docs say it suspends managed user accounts and requires re-provisioning) OR stand up a disposable EMU enterprise for end-to-end validation
+**Prevention (for next time):** (1) When concluding "a feature doesn't exist," search Microsoft docs for the feature across *all* token-type shapes, not just the one the thesis is built around. OIDC and SAML are distinct doc trees in `learn.microsoft.com/entra/` and features often exist in one but not the other. (2) Cross-model review (ChatGPT, Codex, or another LLM with fresh context) is specifically valuable for catching this kind of over-generalization — a second model with no investment in the original framing will surface adjacencies the primary author missed. (3) When the research finding is "X is impossible," phrase it as narrowly as the evidence supports. "OIDC federation is impossible" is defensible; "all federation is impossible" is a stronger claim that requires wider evidence. **(4) When a user pushes back on a "definitive" finding, take the push-back seriously; over-confidence is a leading indicator of unexamined assumptions.**
+**Evidence/references:** [Microsoft Learn: Manage assignment of agent identities to an application (Preview)](https://learn.microsoft.com/entra/identity/enterprise-apps/assign-agent-identities-to-applications#assigning-to-saml-based-applications) — full 4-hop protocol description and required tenant artifacts; [OBO SAML assertion response](https://learn.microsoft.com/entra/identity-platform/v2-oauth2-on-behalf-of-flow#saml-assertions-obtained-with-an-oauth20-obo-flow) — response shape + InResponseTo caveat; `~/.gstack/projects/brandwe-entraclaw-identity-research/brandonwerner-main-design-20260423-183328.md` "Phase 0C: SAML Path Identified" section for the full correction and Phase 0C spike plan.
+**FOLLOW-UP — see Learning #43:** Phase A/B/C were empirically executed 2026-04-24. Phase A (OBO-SAML mint) succeeded. Phase B (GitHub EMU SAML gallery app + claim mapping via Graph) succeeded. Phase C (GitHub ACS session establishment) is blocked by a protocol incompatibility between Microsoft OBO-SAML's InResponseTo-less assertion shape and GitHub EMU's Web SSO InResponseTo requirement. Learning #43 documents the empirical confirmation.
+
+---
+
+### Learning #43: Microsoft OBO-SAML and GitHub EMU SAML Are Protocol-Incompatible on InResponseTo
+
+**Date:** 2026-04-24 (same evening as #42, post-empirical execution)
+**Status:** **DEFINITIVE — empirically proven via Phase A/B/C end-to-end execution against werner-co GitHub Enterprise + werner.ac Entra tenant.**
+**Context:** After Learning #42 identified the preview OBO-SAML flow as the missing "Hop 4," we executed the full spike path: Phase A (emit SAML assertion against dummy target), Phase B (GitHub EMU SAML gallery app configuration via Graph, including entity ID, signing cert, and claimsMappingPolicy for NameID = UPN), Phase C (inject assertion into GitHub's SAML ACS and verify session establishment). Phase A and B succeeded cleanly. Phase C hit a fundamental protocol gap that defines the limits of the Microsoft OBO-SAML preview primitive.
+**Problem:** The Microsoft OBO-SAML flow emits a SAML assertion where the signed `<SubjectConfirmationData>` contains NO `InResponseTo` attribute, because the OBO request has no AuthnRequest context to reference. The Microsoft OBO-SAML reference documentation explicitly warns: *"the target app must be able to accept a SAML assertion without an InResponseTo value."* GitHub EMU's SAML ACS is NOT such a target — it requires `InResponseTo` inside the signed `<SubjectConfirmationData>` to bind the assertion to an active SP-initiated session. When we inject an OBO-derived assertion (with InResponseTo only on the outer `<samlp:Response>` envelope), GitHub's ACS silently rejects it: the assertion is accepted at the surface level (consent page "Signed in with Werner Co" renders, `logged_in=yes` + `saml_csrf_token` cookies set), GitHub's `js-auto-replay-enforced-sso-request` JavaScript fires the expected auto-replay form submit, but the subsequent POST returns 302 to `/enterprises/werner-co/sso` without issuing `user_session` or `dotcom_user` cookies. Zero login events appear in GitHub's enterprise audit log, confirming the rejection happens in a pre-session-creation validation step.
+**Investigation done:**
+1. Phase A empirically executed: `/tmp/phase_a_saml_spike.py` with SAML helper app, dummy target. Hop 4 returned base64url SAML assertion (5208 bytes), signed RSA-SHA256 by Entra. Verified Issuer=`sts.windows.net/<tenant>/`, Audience=target entity ID, NameID=Agent User UPN (after claimsMappingPolicy).
+2. Phase B: instantiated GitHub Enterprise Managed User (SAML) gallery app template `3b5ca639-0790-480e-9b24-9625375a05e7` via `/applicationTemplates/.../instantiate`. Configured identifierUris (overrode the HostNameNotOnVerifiedDomain check via SPN), added `addTokenSigningCertificate`, set `preferredTokenSigningKeyThumbprint`, wired oAuth2PermissionGrants, created claimsMappingPolicy with NameID source = `user.userprincipalname`, attached to SP, set `api.acceptMappedClaims=true` on the application. Hop 4 against the real GitHub app produced an assertion with Audience=`https://github.com/enterprises/werner-co`, NameID=`entraclaw-agent-sati-agent@werner.ac`, Format=`urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress`.
+3. Phase C attempted four variants: (a) IdP-init POST to ACS with consent-page Continue replay — looped back to /sso; (b) SP-initiated flow with matching InResponseTo on outer envelope via httpx — same loop; (c) browser header spoofing (Sec-Fetch-User=?1 etc.) — no change; (d) Playwright-driven SP-init with `page.route()` intercepting the browser's GET on Entra `/saml2`, injecting an auto-submitting HTML that POSTs our OBO-derived envelope with matching InResponseTo to GitHub's ACS — same terminal state: 200 → consent page → 302 → /sso, no user_session. GitHub's audit log confirmed zero login events across all attempts.
+4. The blocker is the signed `<SubjectConfirmationData>` inside the assertion: Entra signs it, we cannot modify it without breaking the signature, we don't have Entra's signing key. The OBO flow explicitly does not include InResponseTo there (Microsoft's docs warn about this). GitHub EMU explicitly requires it (behavior confirmed: SP-init → inject → 302 loop).
+**Root cause:** Protocol incompatibility between two standards-compliant SAML dialects. Microsoft OBO-SAML was designed for SAML consumers that do programmatic bearer-assertion validation without the Web SSO AuthnRequest/Response binding (backend-to-backend SAML, some legacy WS-Federation endpoints, explicit API-consumer patterns). GitHub EMU SAML was designed for browser-mediated Web SSO where assertions are bound to specific AuthnRequests via InResponseTo in SubjectConfirmationData. The two dialects don't compose for the "Agent User signs into GitHub as a first-class user" scenario.
+**The sharpened research contribution:** Microsoft already ships the SAML-shape primitive that the OIDC side lacks — but the SAML primitive only works for InResponseTo-agnostic RPs. For InResponseTo-requiring RPs (Web SSO SaaS like GitHub EMU, most gallery apps), Microsoft's OBO-SAML cannot establish browser sessions. This narrows the research recommendation: Microsoft needs to (a) add an OIDC-shaped OBO for external audiences (Recommendation A), AND/OR (b) extend OBO-SAML to accept an optional in_response_to / authn_request_id parameter (Recommendation B) so the emitted assertion can carry InResponseTo in the signed SubjectConfirmationData when a downstream RP needs it. Either closes the gap for browser-SSO SaaS.
+**Prevention (for next time):** (1) When evaluating SAML interop for a new target, explicitly verify whether the RP requires InResponseTo in SubjectConfirmationData before building around a Microsoft OBO-SAML flow. The Microsoft docs flag this constraint; take the flag seriously. (2) Web SSO SaaS (GitHub, Salesforce, Slack-SAML, most gallery apps) generally require InResponseTo binding. Backend-to-backend SAML APIs generally do not. The distinction matters. (3) Empirical Phase A+B success (clean signed assertion with correct audience/NameID) does NOT imply Phase C success. The last mile of Web SSO is a strict protocol-binding step; assertion correctness is necessary but not sufficient. (4) GitHub's audit log is an authoritative signal: if zero login events appear despite the assertion being accepted at the surface level, the RP is failing validation in a pre-session-creation step — usually InResponseTo or signature-placement mismatch.
+**Evidence/references:** `/tmp/phase_a_saml_spike.py` (Phase A spike, emits valid assertion); `/tmp/phase_c_playwright_intercept.py` (Phase C Playwright + route() interception, most advanced variant tried); `/tmp/phase_a_saml_assertion.xml` (raw Entra-signed assertion for dummy target); `/tmp/phase_b_saml_assertion.xml` (raw assertion for real GitHub EMU target); `/tmp/phase_c_envelope.xml` (decoded injection envelope); `~/Documents/entra-agent-user-oidc-federation-findings.docx` v3 for the full research narrative. Microsoft docs: [agent-identities-to-applications SAML flow](https://learn.microsoft.com/entra/identity/enterprise-apps/assign-agent-identities-to-applications#assigning-to-saml-based-applications), [OBO SAML response](https://learn.microsoft.com/entra/identity-platform/v2-oauth2-on-behalf-of-flow#saml-assertions-obtained-with-an-oauth20-obo-flow) (note the InResponseTo caveat). GitHub audit log (werner-co enterprise) — zero login events for the Agent User across all Phase C attempts.
+
+---
+
+### Learning #44: Parent-Directory Rename Orphans the venv (Shebangs + `.pth` Hardcode Absolute Paths at Install Time)
+
+**Date:** 2026-04-24
+**Status:** **CONFIRMED — reproduced and fixed in ~2 min; terminal-slowness symptom confirmed as side-effect.**
+**Context:** After PR #39 merged (code-level `openclaw → entraclaw` rename on 2026-04-23), the repo directory on disk was also renamed from `/Volumes/Development HD/openclaw-identity-research` to `/Volumes/Development HD/entraclaw-identity-research`. The code rename was clean; the directory rename silently orphaned the `.venv/`.
+**Problem:** Overnight, every MCP launch of `.venv/bin/entraclaw-mcp` failed instantly with `/Volumes/Development HD/openclaw-identity-research/.venv/bin/python3: No such file or directory`. Claude Code's MCP client entered a crash-reconnect loop on the stdio server, and the loop itself was the cause of "terminal is very slow" — not Claude, not the network, not persona-sati.
+**Root cause:** `python -m venv <path>` bakes `<path>` into `.venv/pyvenv.cfg` as `command = ... -m venv /Volumes/Development HD/openclaw-identity-research/.venv`, and every console-script in `.venv/bin/` (`pip`, `python3`, `entraclaw-mcp`, etc.) gets a shebang or `exec` line with the interpreter's absolute path. An editable-install `.pth` file in `site-packages/` also hardcodes the source-tree path. Renaming the parent directory invalidates all three simultaneously — pyvenv.cfg, every script shebang, AND the editable-install source pointer. The venv looks intact (files present, executable bit set) but every invocation dies on the stale interpreter path.
+**Investigation done:**
+1. Ran `.venv/bin/entraclaw-mcp` directly — surfaced the stale shebang in one line: `/Volumes/Development HD/openclaw-identity-research/.venv/bin/python3: No such file or directory`.
+2. `.venv/bin/python3 -c "import entraclaw"` raised `ModuleNotFoundError` — confirmed the editable `.pth` was also pointing at the old path (or the interpreter itself was unreachable; in this case the interpreter was broken first, so import didn't even get that far).
+3. `cat .venv/pyvenv.cfg` showed `command = /opt/homebrew/opt/python@3.12/bin/python3.12 -m venv /Volumes/Development HD/openclaw-identity-research/.venv` — the smoking gun.
+4. Fix: `rm -rf .venv && python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"`. Total time ~90 seconds.
+5. Post-fix verification: shebang now `/Volumes/Development HD/entraclaw-identity-research/.venv/bin/python3.12`, `import entraclaw` resolves to `.../entraclaw-identity-research/src/entraclaw/__init__.py`, MCP reconnected clean.
+**Prevention (for next time):** (1) A repo-directory rename is a **three-part operation**, not one: code rename (git-tracked), directory rename (filesystem), **and venv recreation** (untracked side-effect). If you forget the third, the venv dies silently at next MCP launch. (2) If Claude Code suddenly feels slow and an MCP server is listed as stdio, assume the MCP crash-loop first — `/mcp` → "Reconnect <server>" surfaces the failure reason in the status. Don't chase Claude-harness or network theories until the MCP launch is known-green. (3) A one-line debug shortcut for any suspected Python-venv path corruption: `head -3 .venv/bin/<script> && cat .venv/pyvenv.cfg | grep command`. Both outputs should contain the **current** repo path. If either contains an old path, recreate the venv. (4) This is the sibling failure mode of Learning #36 (sub-agent worktree installs re-pointing the parent venv); both are "venv paths become stale without surfacing a friendly error." A healthy reflex: after any directory-level rename/move/symlink, immediately run `.venv/bin/python -c "from entraclaw import config; print(config.__file__)"` as a one-call sanity check. If it prints the expected path, you're clean. If it errors or prints a path you don't expect, stop and fix before moving on.
+**Evidence/references:** Fix executed during this session — pyvenv.cfg before/after captured in session transcript. Related: Learning #36 (worktree venv shadowing, the sibling failure mode). Commit that triggered this: c0bea8d (PR #39, `refactor: rename openclaw → entraclaw across repo`, merged 2026-04-23 17:34 PDT).
+
+---
+
 ### Learning #45: Wrapper Scripts Bypass `_is_self_referential_peer` and Reintroduce the Self-Spawn Cascade
 
 **Date:** 2026-04-24

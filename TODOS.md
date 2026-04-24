@@ -64,6 +64,36 @@ Serialize the in-memory sent-message-ID set to keyring or local file, reload on 
 - **Depends on:** PR #1 (sent-message tracking must ship first)
 - **Source:** Eng review + Codex outside voice, tension point #3
 
+### CA policy pre-audit tool (`scripts/audit_ca_policies.py`)
+Enumerate Conditional Access policies applicable to the Agent User and flag any that would block silent sign-in (MFA required, device compliance required, sign-in risk thresholds, location-based blocks). Graph `GET /identity/conditionalAccess/policies`, filter by `conditions.users.includeUsers` / included groups containing the Agent User's object ID. Emit a pass/fail report with the policy names that would break silent OIDC federation. Reusable for every future federated target (GitHub, Slack, Jira, Linear), not GitHub-specific.
+- **Effort:** S (CC: ~S) — Graph call + policy predicate matching
+- **Depends on:** Admin with `Policy.Read.All` Graph scope available to the provisioner token
+- **Source:** Eng review of GitHub OIDC federation design, 2026-04-23 (Premise P3/P5 surfaced the need)
+
+### Generalize OIDC federation test-fixture pattern (`tests/conftest.py`)
+Extract the Hop 4 / OIDC-federation fixture pattern (parametrized `mock_token_endpoint` routing by `grant_type`, `mock_sso_driver`, `mock_oidc_rp_callback`) into session-scoped conftest fixtures keyed by target SaaS. Each future federated target (Slack, Jira, Linear, Copilot Workspace) then adds tests in ~10 lines of test-data instead of ~300 lines of test-machinery. Write the conftest AFTER GitHub fixtures stabilize (so we're generalizing from working code, not imagined code).
+- **Effort:** S (CC: ~S) — one conftest module + documentation in a platform-learning doc
+- **Depends on:** GitHub OIDC federation ships and its test fixtures stabilize
+- **Source:** Eng review of GitHub OIDC federation design, 2026-04-23 — Approach B chosen specifically to generalize, tests should generalize too
+
+### ~~CBA-based Agent User sign-in for external OIDC federation (Phase 0B spike)~~ — BLOCKED, see Learning #41
+Phase 0B spike (2026-04-24, evening) proved the CBA pivot is also architecturally blocked. Tenant CBA was enabled, root CA uploaded, user cert generated with correct SANs — but `POST /common/GetCredentialType` for the Agent User returns `CertAuthParams=null, FidoParams=null, RemoteNgcParams=null, SasParams=null`. The `#microsoft.graph.agentUser` directory subtype architecturally excludes ALL interactive auth credential types. Not a config gap; a deliberate Microsoft design decision. TODO superseded by "Entra Agent ID feature request" below. Evidence: `docs/runbooks/hard-won-learnings.md` Learning #41 + design doc "Phase 0B Findings: CBA Also Blocked for agentUser Type" section.
+
+### ~~Phase 0C spike: validate agent-user → SAML helper app → OBO flow end-to-end~~ — COMPLETED 2026-04-24
+Phase A + B + C empirically executed 2026-04-24 against werner.ac + werner-co. Results: Entra OBO-SAML flow works end-to-end for assertion minting (Phase A + B validated). GitHub ACS session establishment blocked by InResponseTo protocol incompatibility (Phase C). See Learning #43 in `docs/runbooks/hard-won-learnings.md` for the full evidence trail and `~/Documents/entra-agent-user-oidc-federation-findings.docx` v3 for the publication-ready research artifact. TODO superseded by the feature request entry below.
+
+### Entra Agent ID feature request: close the OIDC-SAML asymmetry for external federation
+CORRECTED framing (was "enable OIDC federation to external SaaS"): Microsoft ships the preview agent-user-to-SAML-application flow, so the research finding is not a missing primitive but a specific asymmetry. Feature request to the Entra Agent ID team: (A) add the OIDC-shaped equivalent of the preview SAML flow — same helper-app-OBO pattern but with `requested_token_type=urn:ietf:params:oauth:token-type:id_token` and an `audience` parameter naming the external OIDC RP's client_id — unblocking GitHub OIDC, Slack, Jira, Linear, Copilot Workspace in one primitive; (B) productize the preview SAML flow to GA with clarity on the `<samlp:Response>` envelope vs bare `<Assertion>` distinction and published compatibility guidance for common SAML RPs including GitHub EMU. Evidence: Learnings #40, #41, #42 + curl repros + the SAML preview doc. The ask is narrower and more actionable than the original "add Hop 4" framing.
+- **Effort:** S (human: ~4 hours / CC: ~30 min) — draft the post, link Learnings, include the curl repros
+- **Depends on:** Phase 0C spike results (useful but not strictly required — the feature request is defensible on the documented asymmetry alone)
+- **Source:** Phase 0 + 0B + 0C spike results 2026-04-24
+
+### ADR-006: Agent User OIDC federation infeasibility (write the research artifact)
+Write `docs/decisions/006-agent-user-external-oidc-federation-infeasible.md` capturing both spike outcomes and the platform feedback request. This is the research artifact for the GitHub federation thread. Fold in both Learnings #40 and #41, the curl repros, the Microsoft docs confirmations, the GetCredentialType diagnostic, and the three remaining paths (regular User + CBA; GitHub App impersonation; SCIM-admin-minted PAT) with explicit rejection rationale for each against the original thesis. Close the design doc thread.
+- **Effort:** S (human: ~4 hours / CC: ~30 min)
+- **Depends on:** Phase 0 + 0B design-doc sections (already written)
+- **Source:** Phase 0/0B 2026-04-24
+
 ## P3
 
 ### Unify HTTP stacks (MSAL requests → httpx adapter)
