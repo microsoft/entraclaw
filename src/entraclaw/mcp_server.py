@@ -1419,10 +1419,29 @@ async def _background_daily_summary() -> None:
 
 
 def _summarize_content(content: str, limit: int = 200) -> str:
-    """Strip HTML and truncate — used when the caller didn't supply a summary."""
+    """Strip HTML and truncate — used when the caller didn't supply a summary.
+
+    ``<img src>`` and ``<a href>`` URLs are extracted into plain-text
+    markers before tags are stripped so the channel push doesn't lose
+    the only signal in giphy embeds and link cards (regression
+    2026-04-27 — see ``docs/runbooks/mcp-disconnect-investigation.md``).
+    """
     import re
 
-    text = re.sub(r"<[^>]+>", " ", content or "")
+    text = content or ""
+    text = re.sub(
+        r"""<img\b[^>]*?\bsrc=["']([^"']+)["'][^>]*?/?>""",
+        r" [image: \1] ",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    text = re.sub(
+        r"""<a\b[^>]*?\bhref=["']([^"']+)["'][^>]*?>(.*?)</a>""",
+        r" \2 (\1) ",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) <= limit:
         return text

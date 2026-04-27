@@ -425,6 +425,35 @@ This is a real performance bug but NOT the primary disconnect trigger
 
 ---
 
+## 2026-04-27 addendum — sanitizer extended to preserve `<img src>` and `<a href>` URLs
+
+After the 2026-04-24 fix (commit `f0d29ea`), a 2026-04-27 inbox replay
+of seven backlog messages preceded another MCP disconnect. Two payload
+shapes were under suspicion: a giphy `<div><img src="https://media4.giphy.com/...">`
+embed and a Teams `<attachment id="..."></attachment>` + `<a href>` link
+card. Probing `_summarize_content` directly against both shapes showed
+the existing `<[^>]+>` strip already removed every angle bracket — so
+the JSON-RPC `params.content` itself cannot have introduced raw `<` or
+`>` into the framing. What *did* regress was readability: the giphy
+embed sanitized to an empty string (the URL was the entire signal) and
+the anchor card sanitized to bare anchor text (the URL was discarded).
+This PR tightens `_summarize_content` to extract `<img src>` URLs into
+`[image: <url>]` markers and `<a href>` anchors into `text (<url>)`
+form *before* the global tag strip, so the LLM consuming the channel
+push retains the URL signal in giphy and link-card messages. Existing
+strip behavior for `<p>`, `<at>`, `<attachment>`, etc. is unchanged
+and the f0d29ea-era assertions still hold. **If MCP disconnects recur
+after this PR**, the sanitizer is no longer the suspect — audit the
+JSON-RPC envelope outside `params.content`: `meta.user` (display name
+that could carry `<addr@example.com>` shapes), `meta.quoted_messages`
+fields beyond `content`, or control characters / unescaped sequences
+in `chat_id` or `message_id`. See `src/entraclaw/mcp_server.py`
+`_summarize_content` and `tests/test_mcp_server_integration.py`
+`test_channel_notification_preserves_img_src_url` /
+`test_channel_notification_preserves_anchor_text_and_href`.
+
+---
+
 - `docs/runbooks/hard-won-learnings.md` Learning #36 (venv corruption)
 - `docs/runbooks/hard-won-learnings.md` Learning #37 (self-spawn cascade)
 - `docs/runbooks/hard-won-learnings.md` Learning #38 (leader-cache overwrite)

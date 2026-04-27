@@ -1110,6 +1110,88 @@ class TestPushChannelNotificationObservability:
         assert "</p>" not in content
 
     @pytest.mark.asyncio
+    async def test_channel_notification_preserves_img_src_url(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Giphy and other ``<img src="...">`` embeds slipped past the
+        2026-04-24 sanitizer: the src URL got dropped, leaving an empty
+        content string that lost the only signal in the message. Preserve
+        the URL as plain text so the LLM can see it, while keeping the
+        payload free of angle brackets that close the MCP stream.
+        """
+        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+
+        from entraclaw import mcp_server
+
+        giphy_src = "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExeXh0ZGF6/giphy.gif"
+        mock_stream = AsyncMock()
+        mcp_server._state["_write_stream"] = mock_stream
+        try:
+            await mcp_server._push_channel_notification(
+                {
+                    "message_id": "m-img-1",
+                    "from": "Joe Brockhaus",
+                    "content": f'<div><img src="{giphy_src}" alt="" /></div>',
+                    "sent_at": "2026-04-27T21:46:41Z",
+                },
+                chat_id="19:abc@unq.gbl.spaces",
+            )
+        finally:
+            mcp_server._state.pop("_write_stream", None)
+
+        mock_stream.send.assert_awaited_once()
+        notif_params = mock_stream.send.call_args.args[0].message.root.params
+        content = notif_params["content"]
+        assert "<" not in content, f"raw angle bracket survived: {content!r}"
+        assert ">" not in content, f"raw angle bracket survived: {content!r}"
+        assert giphy_src in content, (
+            f"img src URL must round-trip into content for the LLM, got: {content!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_channel_notification_preserves_anchor_text_and_href(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Teams ``<attachment>`` cards that wrap an ``<a href>`` link lost
+        the URL after the 2026-04-24 sanitizer ran — only the anchor text
+        survived. Keep both: anchor text plus the href URL, no angles.
+        """
+        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+
+        from entraclaw import mcp_server
+
+        href = "https://example.com/path/to/resource"
+        mock_stream = AsyncMock()
+        mcp_server._state["_write_stream"] = mock_stream
+        try:
+            await mcp_server._push_channel_notification(
+                {
+                    "message_id": "m-att-1",
+                    "from": "Brandon Werner",
+                    "content": (
+                        '<attachment id="1776624654280"></attachment>\n'
+                        f'<p><a href="{href}">link text</a></p>'
+                    ),
+                    "sent_at": "2026-04-27T21:46:43Z",
+                },
+                chat_id="19:abc@unq.gbl.spaces",
+            )
+        finally:
+            mcp_server._state.pop("_write_stream", None)
+
+        mock_stream.send.assert_awaited_once()
+        notif_params = mock_stream.send.call_args.args[0].message.root.params
+        content = notif_params["content"]
+        assert "<" not in content, f"raw angle bracket survived: {content!r}"
+        assert ">" not in content, f"raw angle bracket survived: {content!r}"
+        assert "link text" in content, (
+            f"anchor text must survive sanitization, got: {content!r}"
+        )
+        assert href in content, (
+            f"href URL must round-trip into content for the LLM, got: {content!r}"
+        )
+
+    @pytest.mark.asyncio
     async def test_reply_to_ids_forwarded_into_meta(
         self, tmp_path, monkeypatch
     ) -> None:
