@@ -24,6 +24,8 @@ TOTAL_STEPS=8
 SWITCH_USER=false
 TEAMS_USER_EMAIL=""
 SHOW_HELP=false
+DIAGNOSE=false
+SKIP_SMOKE=false
 # Local is the default for operational storage; users opt in to cloud
 # via --cloud-memory. The old --keep-memory-local flag is accepted as a
 # no-op alias so existing scripts keep working.
@@ -58,6 +60,12 @@ for arg in "$@"; do
             ;;
         --with-upn-suffix=*)
             UPN_SUFFIX="${arg#--with-upn-suffix=}"
+            ;;
+        --diagnose)
+            DIAGNOSE=true
+            ;;
+        --skip-smoke)
+            SKIP_SMOKE=true
             ;;
         --help|-h)
             SHOW_HELP=true
@@ -112,6 +120,17 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         opts the PreToolUse hook out so Claude Code's local"
     echo "                         auto-memory directory is writable again."
     echo "  --help, -h             Show this help"
+    echo ""
+    echo "Diagnostics:"
+    echo "  --diagnose             Skip provisioning. Run a full health check"
+    echo "                         (state file, certificate, three-hop token,"
+    echo "                         Graph identity, Teams scope, MCP wiring) and"
+    echo "                         print a pass/fail report. Use this to debug"
+    echo "                         a previously-completed install. Exits non-zero"
+    echo "                         if any check fails."
+    echo "  --skip-smoke           Skip the post-setup smoke test (token + Graph"
+    echo "                         identity + Teams scope). Useful in CI where"
+    echo "                         no live tenant is reachable."
     exit 0
 fi
 
@@ -140,6 +159,50 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║   EntraClaw Identity Research — Setup         ║${NC}"
 echo -e "${GREEN}║   (Agent User — no OBO, no device-code flow) ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
+
+# ── --diagnose short-circuit ────────────────────────────────────────────────
+# Read existing .env + state, run preflight.run_diagnostics, exit. No
+# provisioning happens. Use this to debug a previously-completed install.
+if [ "$DIAGNOSE" = true ]; then
+    echo ""
+    echo -e "${BLUE}Running diagnostics (provisioning skipped)...${NC}"
+    if [ ! -d "$PROJECT_ROOT/.venv" ]; then
+        fail "No .venv found. Run setup.sh once before --diagnose."
+    fi
+    set +e
+    # shellcheck disable=SC1091
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        set -a; . "$PROJECT_ROOT/.env"; set +a
+    fi
+    "$PROJECT_ROOT/.venv/bin/python" - <<PY
+import sys
+from pathlib import Path
+
+from entraclaw.config import EntraClawConfig
+from entraclaw.preflight import format_report, overall_exit_code, run_diagnostics
+
+config = EntraClawConfig.from_env()
+project_root = Path("$PROJECT_ROOT")
+checks = run_diagnostics(
+    config,
+    state_path=project_root / ".entraclaw-state.json",
+    expected_binary=project_root / ".venv" / "bin" / "entraclaw-mcp",
+    claude_mcp_path=project_root / ".mcp.json",
+    copilot_mcp_path=Path.home() / ".copilot" / "mcp-config.json",
+)
+print(format_report(checks, color=sys.stdout.isatty()))
+sys.exit(overall_exit_code(checks))
+PY
+    DIAG_EXIT=$?
+    set -e
+    echo ""
+    if [ "$DIAG_EXIT" -eq 0 ]; then
+        echo -e "${GREEN}Diagnostics: all checks passed.${NC}"
+    else
+        echo -e "${RED}Diagnostics: one or more checks failed (see above).${NC}"
+    fi
+    exit "$DIAG_EXIT"
+fi
 
 # ── Helper: read value from .entraclaw-state.json ───────────────────────────
 
@@ -218,6 +281,31 @@ HUMAN_USER_ID=$(az ad signed-in-user show --query "id" -o tsv || echo "")
 
 if [ -z "$HUMAN_USER_ID" ]; then
     fail "Could not determine signed-in user ID. Ensure 'az login' is done with a user account."
+fi
+
+# ── License preflight (informational, never blocks) ────────────────────────
+# Check whether this tenant has a Teams-capable SKU with free seats *before*
+# we provision anything. A warn here is non-fatal — setup.sh will still
+# complete, but the agent user won't be able to sign into Teams without a
+# license. Surface the warning early so the VP knows what to expect.
+if command -v az >/dev/null 2>&1 && [ -d "$PROJECT_ROOT/.venv" ]; then
+    GRAPH_TOKEN=$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv 2>/dev/null || echo "")
+    if [ -n "$GRAPH_TOKEN" ]; then
+        set +e
+        "$PROJECT_ROOT/.venv/bin/python" - "$GRAPH_TOKEN" <<'PY' 2>&1 || true
+import sys
+from entraclaw.preflight import check_teams_license_availability, format_report
+
+token = sys.argv[1]
+result = check_teams_license_availability(token)
+# Only print warn/skip — pass is silent so we don't add noise on green runs.
+if result.status == "pass":
+    print(f"  \033[0;32m✅ Teams license available: {result.detail}\033[0m")
+else:
+    print(format_report([result], color=sys.stdout.isatty()))
+PY
+        set -e
+    fi
 fi
 
 # If --teams-user was specified, resolve user(s) for Teams (comma-separated for group chat)
@@ -839,6 +927,40 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 step 8 "Setup complete — summary"
 
+# ── Post-setup smoke test ──────────────────────────────────────────────────
+# Verify the agent user can actually mint a token, identify itself to Graph,
+# and reach the Teams scope. This is the single check that distinguishes a
+# "looks complete" setup from an "actually works" setup. Skip with
+# --skip-smoke in CI environments where no live tenant is reachable.
+SMOKE_FAILED=false
+if [ "$SKIP_SMOKE" = true ]; then
+    warn "Smoke test skipped (--skip-smoke)"
+elif [ -d "$PROJECT_ROOT/.venv" ] && [ -f "$PROJECT_ROOT/.env" ]; then
+    echo ""
+    echo -e "  ${BLUE}Running smoke test (token + Graph identity + Teams scope)...${NC}"
+    set +e
+    set -a; . "$PROJECT_ROOT/.env"; set +a
+    "$PROJECT_ROOT/.venv/bin/python" - <<'PY'
+import sys
+from entraclaw.config import EntraClawConfig
+from entraclaw.preflight import format_report, overall_exit_code, run_smoke_checks
+
+config = EntraClawConfig.from_env()
+checks = run_smoke_checks(config)
+print(format_report(checks, color=sys.stdout.isatty()))
+sys.exit(overall_exit_code(checks))
+PY
+    SMOKE_EXIT=$?
+    set -e
+    if [ "$SMOKE_EXIT" -ne 0 ]; then
+        SMOKE_FAILED=true
+        warn "Smoke test failed. The agent provisioning succeeded, but the agent"
+        warn "can't yet authenticate end-to-end. Most common cause: Teams license"
+        warn "was just assigned and replication hasn't completed (10-15 min)."
+        warn "Re-run ./scripts/setup.sh --diagnose later to confirm."
+    fi
+fi
+
 echo ""
 if [ "$MIGRATION_FAILED" = true ]; then
     echo -e "${RED}╔══════════════════════════════════════════════════════════════╗${NC}"
@@ -900,4 +1022,11 @@ if [ "$MIGRATION_FAILED" = true ]; then
     echo -e "  ${RED}Re-run ${BLUE}./scripts/setup.sh${RED} after fixing the migration error above.${NC}"
     echo ""
     exit 2
+fi
+
+if [ "$SMOKE_FAILED" = true ]; then
+    echo -e "  ${YELLOW}Smoke test failed — provisioning is done but auth path isn't healthy yet.${NC}"
+    echo -e "  ${YELLOW}Re-run ${BLUE}./scripts/setup.sh --diagnose${YELLOW} after replication completes.${NC}"
+    echo ""
+    exit 3
 fi

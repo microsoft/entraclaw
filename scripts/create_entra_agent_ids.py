@@ -41,6 +41,10 @@ from entra_provisioning import (  # noqa: E402 — sys.path insert precedes this
     set_state,
 )
 
+# The repo root is one directory up; src/ contains the entraclaw package.
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src"))
+from entraclaw.preflight import TEAMS_CAPABLE_SKUS  # noqa: E402
+
 GRAPH_BASE = "https://graph.microsoft.com/beta"
 
 BLUEPRINT_DISPLAY_NAME = "EntraClaw Code Agent"
@@ -787,19 +791,9 @@ def grant_agent_user_storage_consent(
 # ---------------------------------------------------------------------------
 # License assignment
 # ---------------------------------------------------------------------------
-
-# SKU part numbers that include Teams (any of these will work)
-TEAMS_CAPABLE_SKUS = [
-    "ENTERPRISEPREMIUM",     # M365 E5
-    "SPE_E5",                # M365 E5 (alternate)
-    "SPE_E3",                # M365 E3
-    "ENTERPRISEPACK",        # Office 365 E3
-    "TEAMS_EXPLORATORY",     # Teams Exploratory
-    "Microsoft_Teams_Essentials",
-    "TEAMS_PREMIUM",
-    "M365_E5_SUITE_COMPONENTS",
-    "MICROSOFT_365_COPILOT",  # M365 Copilot (includes Teams)
-]
+# TEAMS_CAPABLE_SKUS is imported from entraclaw.preflight — single source of
+# truth so setup.sh's preflight check and the actual license assignment use
+# the same SKU list.
 
 
 def _get_available_skus(token: str) -> list[dict]:
