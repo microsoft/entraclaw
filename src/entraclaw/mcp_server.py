@@ -2779,13 +2779,33 @@ async def wait_for_sponsor_dm(
 
     async def heartbeat(elapsed_s: float = 0.0) -> None:
         if ctx is not None:
-            from entraclaw.tools.wait_tool import wait_animation_frame
+            import os as _os
 
-            frame = wait_animation_frame(elapsed_s=elapsed_s)
+            from entraclaw.tools.wait_tool import wait_listener_banner
+
+            use_color = _os.environ.get("NO_COLOR", "") == ""
+            # Re-emit the banner with elapsed time so the dog stays
+            # visible. Copilot CLI overwrites prior progress messages,
+            # so a single-line cycling frame would erase the dog.
+            frame = wait_listener_banner(color=use_color, elapsed_s=elapsed_s)
             with contextlib.suppress(Exception):
                 await ctx.report_progress(
                     progress=elapsed_s, total=None, message=frame
                 )
+
+    if ctx is not None:
+        # One-shot startup splash. Honors NO_COLOR per the de-facto
+        # convention (https://no-color.org). Emitted before the wait
+        # loop so the operator sees "I'm listening" before any
+        # heartbeat refreshes the banner with elapsed time.
+        import os as _os
+
+        from entraclaw.tools.wait_tool import wait_listener_banner
+
+        use_color = _os.environ.get("NO_COLOR", "") == ""
+        banner = wait_listener_banner(color=use_color)
+        with contextlib.suppress(Exception):
+            await ctx.report_progress(progress=0.0, total=None, message=banner)
 
     coro = wait_loop(
         list_chat_ids=list_chat_ids,

@@ -21,6 +21,7 @@ from entraclaw.tools.wait_tool import (
     _injection_dedupe_key,
     select_sponsor_message,
     wait_animation_frame,
+    wait_listener_banner,
     wait_loop,
 )
 
@@ -321,6 +322,79 @@ class TestWaitAnimationFrame:
         # Either "2m" / "125s" / "2:05" — any human-readable elapsed
         # marker counts; we just want the number to surface somewhere.
         assert any(token in frame for token in ("125", "2m", "2:0"))
+
+
+class TestWaitListenerBanner:
+    """One-shot startup splash shown when the agent enters
+    ``wait_for_sponsor_dm``. Operators looking at an idle terminal must
+    know (a) the CLI is alive, (b) it's listening to Teams not their
+    keyboard, (c) how to escape, (d) which host CLI gives the full
+    push experience. The banner answers all four in one beat before
+    the cycling status frames take over."""
+
+    def test_returns_a_nonempty_multiline_string(self) -> None:
+        banner = wait_listener_banner()
+        assert isinstance(banner, str)
+        assert banner.strip()
+        assert "\n" in banner, "banner should be multi-line ASCII art"
+
+    def test_banner_mentions_listening(self) -> None:
+        banner = wait_listener_banner().lower()
+        assert "listen" in banner
+
+    def test_banner_mentions_ctrl_c_escape(self) -> None:
+        banner = wait_listener_banner()
+        assert "Ctrl" in banner or "ctrl" in banner.lower()
+
+    def test_banner_mentions_claude_code_for_full_experience(self) -> None:
+        # Copilot CLI doesn't subscribe to notifications/claude/channel,
+        # so the operator should know that Claude Code gives the full
+        # push experience.
+        banner = wait_listener_banner().lower()
+        assert "claude" in banner
+
+    def test_banner_includes_color_codes_when_color_enabled(self) -> None:
+        # ANSI escape sequence presence — the banner is supposed to be
+        # colorful in a real terminal.
+        banner = wait_listener_banner(color=True)
+        assert "\x1b[" in banner
+
+    def test_banner_strips_color_when_disabled(self) -> None:
+        # NO_COLOR / dumb terminals get a plain version with no escapes.
+        banner = wait_listener_banner(color=False)
+        assert "\x1b[" not in banner
+
+    def test_banner_is_deterministic(self) -> None:
+        # Same input, same output. No randomness — this is a splash, not
+        # a slot machine.
+        assert wait_listener_banner(color=False) == wait_listener_banner(color=False)
+
+    def test_banner_contains_a_dog(self) -> None:
+        # The user explicitly asked for a dog. Loose check: at least one
+        # canonical dog-art glyph or 'dog' word should appear so we don't
+        # accidentally regress to a cat or a penguin.
+        banner = wait_listener_banner(color=False)
+        # Common ASCII-dog glyphs: U+1F436 emoji, the "(__)`" snout, or
+        # the literal word "dog" in adjacent prose. Any one suffices.
+        assert "🐕" in banner or "🐶" in banner or "(__)" in banner or "dog" in banner.lower()
+
+    def test_banner_with_elapsed_shows_time(self) -> None:
+        # Heartbeats re-emit the banner with an elapsed-seconds suffix
+        # so the dog stays visible while the operator still gets a
+        # liveness signal. Otherwise Copilot CLI's progress overwrite
+        # would replace the dog with a single-line frame.
+        banner = wait_listener_banner(color=False, elapsed_s=125.0)
+        assert "2m" in banner or "2:0" in banner or "125" in banner
+
+    def test_banner_without_elapsed_omits_time(self) -> None:
+        # Initial splash has no elapsed time — clean banner.
+        banner = wait_listener_banner(color=False)
+        assert "0s" not in banner
+        assert "[0" not in banner
+
+    def test_banner_elapsed_does_not_break_color(self) -> None:
+        banner = wait_listener_banner(color=True, elapsed_s=42.0)
+        assert "\x1b[" in banner
 
 
 # --- Anti-regression: tool doctrine names the broadened trigger ---------

@@ -94,6 +94,62 @@ def wait_animation_frame(
     return f"{art} [{elapsed}{hint}] (Ctrl+C to break)"
 
 
+# Cute one-shot startup splash. Shown ONCE when the agent first enters
+# ``wait_for_sponsor_dm``, before the cycling status frames take over.
+# Operators staring at an idle terminal need a clear signal that (a)
+# the CLI is alive, (b) it's listening to Teams not their keyboard,
+# (c) Ctrl+C is the escape hatch, (d) Claude Code is the host CLI with
+# the richest push experience (Copilot CLI works but doesn't subscribe
+# to notifications/claude/channel).
+_WAIT_LISTENER_DOG = r"""           __
+      (___()'`;  woof! 🐕
+      /,    /`
+      \\"--\\
+"""
+
+# ANSI 16-color codes — universally supported on macOS Terminal,
+# iTerm2, Windows Terminal, Linux terminals, tmux. Avoids 256-color
+# / truecolor sequences for max portability.
+_ANSI_RESET = "\x1b[0m"
+_ANSI_BOLD = "\x1b[1m"
+_ANSI_DIM = "\x1b[2m"
+_ANSI_CYAN = "\x1b[36m"
+_ANSI_YELLOW = "\x1b[33m"
+_ANSI_MAGENTA = "\x1b[35m"
+
+
+def wait_listener_banner(*, color: bool = True, elapsed_s: float | None = None) -> str:
+    """Pure function: render the listener splash for ``wait_for_sponsor_dm``.
+
+    Emitted as the FIRST progress message when the wait loop starts AND
+    re-emitted on every heartbeat tick (with *elapsed_s* set) so the
+    dog stays on screen instead of being overwritten by a single-line
+    cycling frame. Most MCP host CLIs (Copilot, Claude Code) replace
+    the previous progress message with each new beat; re-emitting the
+    same banner is the only way to keep multi-line art visible.
+
+    *color* defaults to True. Pass ``color=False`` for ``NO_COLOR``
+    environments and dumb terminals, which strips all ANSI escapes.
+
+    *elapsed_s*, when provided, appends a compact ``[elapsed]`` suffix
+    to the title line (e.g. ``[2m 5s]``). When ``None`` the title is
+    clean — used for the initial splash.
+    """
+    dog = _WAIT_LISTENER_DOG
+    title = "Listening for my owner's commands..."
+    if elapsed_s is not None:
+        title = f"{title} [{_format_elapsed(elapsed_s)}]"
+    escape = "Press Ctrl+C to exit the wait."
+    note = "Full push experience: Claude Code (Copilot CLI works too)."
+    if color:
+        dog_colored = f"{_ANSI_YELLOW}{dog}{_ANSI_RESET}"
+        title_colored = f"{_ANSI_BOLD}{_ANSI_CYAN}{title}{_ANSI_RESET}"
+        escape_colored = f"{_ANSI_MAGENTA}{escape}{_ANSI_RESET}"
+        note_colored = f"{_ANSI_DIM}{note}{_ANSI_RESET}"
+        return f"{dog_colored}\n{title_colored}\n{escape_colored}\n{note_colored}"
+    return f"{dog}\n{title}\n{escape}\n{note}"
+
+
 @dataclass
 class WaitForSponsorDmResult:
     """Structured return value for ``wait_for_sponsor_dm``."""
