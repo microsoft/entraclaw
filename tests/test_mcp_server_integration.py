@@ -1822,6 +1822,96 @@ class TestPollTaskAutoStart:
 
 
 # ---------------------------------------------------------------------------
+# Sponsor gate cache invalidation on new watched chat
+# ---------------------------------------------------------------------------
+# Historical bug: wait_for_sponsor_dm caches the SponsorGate in
+# _state["sponsor_gate"] at first use. The gate's user_ids set is enriched
+# from chat-member emails at gate-build time, so a chat added AFTER the
+# gate was first built (e.g. via create_chat in a fresh Copilot CLI
+# session) is invisible to the gate. The sponsor's home-tenant userId
+# never gets added, every inbound DM gets rejected, and wait hangs
+# forever. Fix: invalidate the cached gate whenever a NEW chat is
+# registered so the next wait_for_sponsor_dm call rebuilds it with the
+# new chat's members included.
+
+
+class TestSponsorGateInvalidationOnNewChat:
+    """_register_watched_chat must drop the cached sponsor gate when a
+    new chat is added so the next wait_for_sponsor_dm rebuild picks up
+    the new chat's members for federated B2B sponsor enrichment."""
+
+    @pytest.mark.asyncio
+    async def test_register_new_chat_invalidates_sponsor_gate(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("ENTRACLAW_SKIP_PROVISIONING", "true")
+
+        from entraclaw import mcp_server
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.clear()
+            mcp_server._state["watched_chats"] = {}
+            mcp_server._state["sponsor_gate"] = MagicMock(name="cached_gate")
+            running_task = MagicMock()
+            running_task.done.return_value = False
+            mcp_server._state["poll_task"] = running_task
+
+            loop = MagicMock()
+            with patch("asyncio.get_event_loop", return_value=loop):
+                mcp_server._register_watched_chat(
+                    "19:brand-new-chat@unq.gbl.spaces", persist=False
+                )
+
+            assert mcp_server._state.get("sponsor_gate") is None, (
+                "registering a new watched chat must invalidate the cached "
+                "sponsor gate so next wait_for_sponsor_dm rebuilds it"
+            )
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+
+    @pytest.mark.asyncio
+    async def test_register_existing_chat_preserves_sponsor_gate(
+        self, monkeypatch
+    ) -> None:
+        """Idempotent registration — re-registering an already-watched chat
+        must NOT invalidate the gate (avoids unnecessary Graph calls)."""
+        monkeypatch.setenv("ENTRACLAW_SKIP_PROVISIONING", "true")
+
+        from entraclaw import mcp_server
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.clear()
+            existing_chat = "19:already-watched@thread.v2"
+            mcp_server._state["watched_chats"] = {
+                existing_chat: {
+                    "seen_ids": set(),
+                    "last_ts": None,
+                    "bootstrapped": False,
+                }
+            }
+            cached_gate = MagicMock(name="cached_gate")
+            mcp_server._state["sponsor_gate"] = cached_gate
+            running_task = MagicMock()
+            running_task.done.return_value = False
+            mcp_server._state["poll_task"] = running_task
+
+            loop = MagicMock()
+            with patch("asyncio.get_event_loop", return_value=loop):
+                mcp_server._register_watched_chat(existing_chat, persist=False)
+
+            assert mcp_server._state.get("sponsor_gate") is cached_gate, (
+                "re-registering an already-watched chat must NOT invalidate "
+                "the cached sponsor gate"
+            )
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+
+
+# ---------------------------------------------------------------------------
 # Per-chat resilience in _background_poll
 # ---------------------------------------------------------------------------
 # Historical bug: a single chat's Graph error (403 on a stale chat, transient

@@ -900,6 +900,17 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
         _state["watched_chats"] = watched
         if logger:
             logger.info("Registered chat for background polling: %s", chat_id)
+        # Invalidate the cached sponsor gate so the next wait_for_sponsor_dm
+        # call rebuilds it with the new chat's members enriched in. Without
+        # this, a chat created mid-session (e.g. via create_chat in a fresh
+        # Copilot CLI session) is invisible to the gate's user_ids set —
+        # federated B2B sponsors never get matched and wait hangs forever.
+        # See Learning #52 in docs/runbooks/hard-won-learnings.md.
+        if _state.pop("sponsor_gate", None) is not None and logger:
+            logger.info(
+                "Invalidated cached sponsor gate after new watched chat: %s",
+                chat_id,
+            )
 
     _ensure_poll_task_running()
 

@@ -626,6 +626,18 @@ Regression tests in `tests/test_mcp_server_integration.py` cover both raw Teams 
 
 ---
 
+### Learning #52: `wait_for_sponsor_dm` Caches the Sponsor Gate — Stale After `create_chat`
+
+**Date:** 2026-04-28
+**Status:** **CONFIRMED — empirically reproduced after Learnings #50 and #51 shipped to main.**
+**Context:** `wait_for_sponsor_dm` lazy-builds a `SponsorGate` on first use and caches it in `_state["sponsor_gate"]` to avoid hitting Graph on every invocation (`mcp_server.py` ~line 2726). The gate's `user_ids` set is enriched at build time by `with_chat_members(fetch_watched_chat_members(config))` — which only sees chats currently in `watched_chats`. Federated B2B sponsor matching (Learning #50) depends entirely on this enrichment because the home-tenant userId only appears in the chat-member graph, not in the agent's app-registration sponsor list.
+**Problem:** When a Copilot CLI session does `create_chat` to a brand-new sponsor and then immediately `wait_for_sponsor_dm`, the chat is added to `watched_chats` AFTER the gate was first built and cached at MCP boot. The gate has no `user_ids` enrichment for that chat's members, so the sponsor's home-tenant userId is missing from the gate. Every inbound reply gets rejected (`gate rejected message chat=… sender_id=4d4a65ef-… sender= from=Brandon Werner`) and the wait tool hangs forever, even though Codex's adversarial review predicted this exact failure mode at PR-merge time.
+**Fix:** Invalidate `_state["sponsor_gate"]` inside `_register_watched_chat` whenever a NEW chat is added (`mcp_server.py` ~line 902). Idempotent re-registration of an already-watched chat preserves the cache to avoid pointless rebuilds. The next `wait_for_sponsor_dm` call rebuilds the gate via `load_agent_identity_sponsor_gate(config)` which re-runs `fetch_watched_chat_members` over the now-current `watched_chats` set, picks up the new chat's members, and matches federated B2B sponsors correctly.
+**Prevention:** Caches that depend on data which can change mid-session need invalidation hooks at every write site that mutates the dependency. When introducing a cache, write down the dependency graph (gate → watched_chats → chat-member emails → sponsor user_ids) and identify every code path that writes to any node — those are all invalidation sites. Adversarial review (Codex GPT-5.5 in this case) caught it before merge; we should have shipped the invalidation in PR #49 alongside the federated-matching code.
+**Evidence/references:** Live failure in session 2026-04-28 right after `fix/wait-protocol-broadened-trigger` merged to main; Codex adversarial-review prediction matched empirical failure exactly; fix shipped as `fix/sponsor-gate-refresh-on-watched-chat`; new test class `TestSponsorGateInvalidationOnNewChat` in `tests/test_mcp_server_integration.py`; `src/entraclaw/mcp_server.py::_register_watched_chat`.
+
+---
+
 ## Historical Learnings
 
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
