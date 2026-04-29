@@ -42,12 +42,47 @@ class _CryptIntegerBlob(ctypes.Structure):
 
 
 def _load_crypt32() -> Any:
-    """Return the crypt32 DLL handle. Windows-only."""
+    """Return the crypt32 DLL handle with proper 64-bit-safe signatures.
+
+    On Win64, ctypes defaults all foreign function return types to
+    ``c_int`` (32-bit) — which truncates 64-bit pointers like
+    ``HCERTSTORE`` and ``PCCERT_CONTEXT`` and causes access violations
+    when the truncated handle is later dereferenced. We pin argtypes
+    and restype explicitly so the call shape is stable on both x86
+    and x64.
+    """
     if sys.platform != "win32":
         raise RuntimeError(
             "platform.windows cert lookup requires Windows; got platform=" + sys.platform
         )
-    return ctypes.windll.crypt32  # pragma: no cover
+    crypt32 = ctypes.windll.crypt32  # pragma: no cover
+
+    crypt32.CertOpenStore.argtypes = [
+        ctypes.c_void_p,  # lpszStoreProvider (numeric or wide string)
+        ctypes.c_ulong,  # dwEncodingType
+        ctypes.c_void_p,  # hCryptProv
+        ctypes.c_ulong,  # dwFlags
+        ctypes.c_void_p,  # pvPara
+    ]
+    crypt32.CertOpenStore.restype = ctypes.c_void_p  # HCERTSTORE
+
+    crypt32.CertFindCertificateInStore.argtypes = [
+        ctypes.c_void_p,  # hCertStore
+        ctypes.c_ulong,  # dwCertEncodingType
+        ctypes.c_ulong,  # dwFindFlags
+        ctypes.c_ulong,  # dwFindType
+        ctypes.c_void_p,  # pvFindPara
+        ctypes.c_void_p,  # pPrevCertContext
+    ]
+    crypt32.CertFindCertificateInStore.restype = ctypes.c_void_p  # PCCERT_CONTEXT
+
+    crypt32.CertFreeCertificateContext.argtypes = [ctypes.c_void_p]
+    crypt32.CertFreeCertificateContext.restype = ctypes.c_int  # BOOL
+
+    crypt32.CertCloseStore.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    crypt32.CertCloseStore.restype = ctypes.c_int  # BOOL
+
+    return crypt32
 
 
 class WindowsCredentialStore:
