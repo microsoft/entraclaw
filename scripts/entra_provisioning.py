@@ -29,6 +29,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -271,7 +272,8 @@ def clear_state(key: str) -> None:
 
 def run_az(args: list[str], capture: bool = True) -> tuple[int, str, str]:
     """Run an az CLI command, return (returncode, stdout, stderr)."""
-    result = subprocess.run(["az", *args], capture_output=capture, text=True)
+    az_bin = shutil.which("az") or "az"
+    result = subprocess.run([az_bin, *args], capture_output=capture, text=True)
     return result.returncode, result.stdout.strip(), result.stderr.strip()
 
 
