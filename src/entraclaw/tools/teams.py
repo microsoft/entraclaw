@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 
 import httpx
 
@@ -42,6 +43,41 @@ MAX_MESSAGE_LENGTH = 28_000
 
 def _token_url(tenant_id: str) -> str:
     return TOKEN_ENDPOINT.format(tenant=tenant_id)
+
+
+def _build_blueprint_assertion(config: EntraClawConfig, token_endpoint: str) -> str:
+    """Build the Hop-1 client assertion. Dispatches by platform.
+
+    Mac/Linux: pulls PEM from the OS credential store and signs in-process.
+    Windows: uses ``cncrypt_signer`` against the cert in
+    ``Cert:\\CurrentUser\\My`` — private key never leaves the CNG provider.
+    """
+    if sys.platform == "win32":
+        if not config.blueprint_cert_sha1:
+            raise AgentIDNotAvailable(
+                "ENTRACLAW_BLUEPRINT_CERT_SHA1 missing. "
+                "Run setup-windows.cmd to generate the Blueprint cert."
+            )
+        return build_client_assertion(
+            cert_thumbprint=config.blueprint_cert_thumbprint,
+            cert_sha1=config.blueprint_cert_sha1,
+            client_id=config.blueprint_app_id,
+            token_endpoint=token_endpoint,
+        )
+
+    store = get_credential_store()
+    private_key_pem = store.retrieve("entraclaw", "blueprint-private-key")
+    if not private_key_pem:
+        raise AgentIDNotAvailable(
+            "Blueprint private key not found in credential store. "
+            "Run ./scripts/setup.sh to generate and store the certificate."
+        )
+    return build_client_assertion(
+        private_key_pem=private_key_pem,
+        cert_thumbprint=config.blueprint_cert_thumbprint,
+        client_id=config.blueprint_app_id,
+        token_endpoint=token_endpoint,
+    )
 
 
 def _check_token_response(hop: str, data: dict) -> str:
@@ -99,22 +135,7 @@ def acquire_agent_user_token(
 
     timeout = httpx.Timeout(15.0)
 
-    # Retrieve private key from OS credential store (Keychain/TPM/Keyring)
-    store = get_credential_store()
-    private_key_pem = store.retrieve("entraclaw", "blueprint-private-key")
-    if not private_key_pem:
-        raise AgentIDNotAvailable(
-            "Blueprint private key not found in credential store. "
-            "Run ./scripts/setup.sh to generate and store the certificate."
-        )
-
-    # Build JWT assertion (replaces client_secret per ADR-003)
-    jwt_assertion = build_client_assertion(
-        private_key_pem=private_key_pem,
-        cert_thumbprint=config.blueprint_cert_thumbprint,
-        client_id=config.blueprint_app_id,
-        token_endpoint=url,
-    )
+    jwt_assertion = _build_blueprint_assertion(config, url)
 
     # Hop 1: Blueprint exchange token (T1) via client_credentials
     # The Blueprint authenticates with a certificate assertion and requests a token
@@ -209,20 +230,7 @@ def acquire_agent_identity_token(
     url = _token_url(config.tenant_id)  # type: ignore[arg-type]
     timeout = httpx.Timeout(15.0)
 
-    store = get_credential_store()
-    private_key_pem = store.retrieve("entraclaw", "blueprint-private-key")
-    if not private_key_pem:
-        raise AgentIDNotAvailable(
-            "Blueprint private key not found in credential store. "
-            "Run ./scripts/setup.sh to generate and store the certificate."
-        )
-
-    jwt_assertion = build_client_assertion(
-        private_key_pem=private_key_pem,
-        cert_thumbprint=config.blueprint_cert_thumbprint,
-        client_id=config.blueprint_app_id,
-        token_endpoint=url,
-    )
+    jwt_assertion = _build_blueprint_assertion(config, url)
 
     with httpx.Client(timeout=timeout) as client:
         hop1_resp = client.post(
