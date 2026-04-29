@@ -67,12 +67,13 @@ def test_full_signer_chain_software_ksp(fresh_software_cert) -> None:
     sig = cncrypt_signer.sign_pkcs1_sha256(thumbprint=sha1, hash_bytes=digest)
     assert isinstance(sig, bytes) and len(sig) == 256  # RSA-2048 = 256 bytes
 
-    # certificate.build_client_assertion produces a JWT structure.
+    # certificate.build_client_assertion produces a signed JWT.
+    tenant = "00000000-0000-0000-0000-000000000000"
     assertion = certificate.build_client_assertion(
-        tenant_id="00000000-0000-0000-0000-000000000000",
+        cert_thumbprint="dummy-thumbprint",
         client_id="11111111-1111-1111-1111-111111111111",
+        token_endpoint=f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
         cert_sha1=sha1,
-        x5t_s256="dummy-thumbprint",
     )
     parts = assertion.split(".")
     assert len(parts) == 3, "JWT must be header.payload.signature"
