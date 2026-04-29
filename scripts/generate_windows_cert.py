@@ -98,7 +98,7 @@ def _build_command(*, subject: str, days_valid: int, ksp: str) -> list[str]:
         "-KeyLength 2048 "
         "-HashAlgorithm SHA256 "
         "-KeyUsage DigitalSignature "
-        "-KeySpec Signature "
+        "-KeyUsageProperty Sign "
         # ───────────────────────────────────────────────────────────────
         f"-NotAfter (Get-Date).AddDays({days_valid}); "
         "Write-Output $cert.Thumbprint"

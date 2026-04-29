@@ -34,8 +34,8 @@ HARD_LOCKED_FLAGS = [
     "SHA256",
     "-KeyUsage",
     "DigitalSignature",
-    "-KeySpec",
-    "Signature",
+    "-KeyUsageProperty",
+    "Sign",
 ]
 
 

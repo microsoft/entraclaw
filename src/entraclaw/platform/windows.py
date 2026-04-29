@@ -70,30 +70,40 @@ class WindowsCredentialStore:
         Args:
             thumbprint: 40-char hex SHA-1 thumbprint.
         """
-        if not _THUMBPRINT_RE.match(thumbprint or ""):
-            raise ValueError(f"thumbprint must be 40 hex chars, got: {thumbprint!r}")
+        return find_cert_by_thumbprint(thumbprint)
 
-        crypt32 = _load_crypt32()
-        store = crypt32.CertOpenStore(
-            CERT_STORE_PROV_SYSTEM_W,
-            0,
-            0,
-            CERT_SYSTEM_STORE_CURRENT_USER,
-            ctypes.c_wchar_p("My"),
+
+def find_cert_by_thumbprint(thumbprint: str) -> bool:
+    """Module-level cert lookup against ``Cert:\\CurrentUser\\My``.
+
+    Same behavior as :meth:`WindowsCredentialStore.find_cert_by_thumbprint`,
+    exposed as a free function so callers (rotation driver, gated tests)
+    don't need to instantiate the store. Windows-only.
+    """
+    if not _THUMBPRINT_RE.match(thumbprint or ""):
+        raise ValueError(f"thumbprint must be 40 hex chars, got: {thumbprint!r}")
+
+    crypt32 = _load_crypt32()
+    store = crypt32.CertOpenStore(
+        CERT_STORE_PROV_SYSTEM_W,
+        0,
+        0,
+        CERT_SYSTEM_STORE_CURRENT_USER,
+        ctypes.c_wchar_p("My"),
+    )
+    if not store:
+        raise RuntimeError("CertOpenStore(CurrentUser\\My) failed")
+
+    cert_ctx = 0
+    try:
+        raw = bytes.fromhex(thumbprint)
+        buf = (ctypes.c_ubyte * len(raw))(*raw)
+        blob = _CryptIntegerBlob(cbData=len(raw), pbData=buf)
+        cert_ctx = crypt32.CertFindCertificateInStore(
+            store, 0x00010001, 0, CERT_FIND_HASH, ctypes.byref(blob), None
         )
-        if not store:
-            raise RuntimeError("CertOpenStore(CurrentUser\\My) failed")
-
-        cert_ctx = 0
-        try:
-            raw = bytes.fromhex(thumbprint)
-            buf = (ctypes.c_ubyte * len(raw))(*raw)
-            blob = _CryptIntegerBlob(cbData=len(raw), pbData=buf)
-            cert_ctx = crypt32.CertFindCertificateInStore(
-                store, 0x00010001, 0, CERT_FIND_HASH, ctypes.byref(blob), None
-            )
-            return bool(cert_ctx)
-        finally:
-            if cert_ctx:
-                crypt32.CertFreeCertificateContext(cert_ctx)
-            crypt32.CertCloseStore(store, 0)
+        return bool(cert_ctx)
+    finally:
+        if cert_ctx:
+            crypt32.CertFreeCertificateContext(cert_ctx)
+        crypt32.CertCloseStore(store, 0)

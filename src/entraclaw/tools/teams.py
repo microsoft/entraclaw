@@ -46,12 +46,24 @@ def _token_url(tenant_id: str) -> str:
 
 
 def _build_blueprint_assertion(config: EntraClawConfig, token_endpoint: str) -> str:
-    """Build the Hop-1 client assertion. Dispatches by platform.
+    """Build the Hop-1 client assertion.
 
-    Mac/Linux: pulls PEM from the OS credential store and signs in-process.
-    Windows: uses ``cncrypt_signer`` against the cert in
-    ``Cert:\\CurrentUser\\My`` — private key never leaves the CNG provider.
+    Try the keystore PEM first (Mac/Linux runtime, and any platform whose
+    setup wrote a PEM into keyring — including most test fixtures). If
+    no PEM is in the keystore, fall back to the Windows CNG path keyed
+    by ``blueprint_cert_sha1``. A Windows-only setup writes the SHA-1
+    but never a PEM, so real Windows deployments take the CNG branch.
     """
+    store = get_credential_store()
+    private_key_pem = store.retrieve("entraclaw", "blueprint-private-key")
+    if private_key_pem:
+        return build_client_assertion(
+            private_key_pem=private_key_pem,
+            cert_thumbprint=config.blueprint_cert_thumbprint,
+            client_id=config.blueprint_app_id,
+            token_endpoint=token_endpoint,
+        )
+
     if sys.platform == "win32":
         if not config.blueprint_cert_sha1:
             raise AgentIDNotAvailable(
@@ -65,18 +77,9 @@ def _build_blueprint_assertion(config: EntraClawConfig, token_endpoint: str) -> 
             token_endpoint=token_endpoint,
         )
 
-    store = get_credential_store()
-    private_key_pem = store.retrieve("entraclaw", "blueprint-private-key")
-    if not private_key_pem:
-        raise AgentIDNotAvailable(
-            "Blueprint private key not found in credential store. "
-            "Run ./scripts/setup.sh to generate and store the certificate."
-        )
-    return build_client_assertion(
-        private_key_pem=private_key_pem,
-        cert_thumbprint=config.blueprint_cert_thumbprint,
-        client_id=config.blueprint_app_id,
-        token_endpoint=token_endpoint,
+    raise AgentIDNotAvailable(
+        "Blueprint private key not found in credential store. "
+        "Run ./scripts/setup.sh to generate and store the certificate."
     )
 
 
