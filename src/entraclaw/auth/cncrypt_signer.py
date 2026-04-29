@@ -62,16 +62,55 @@ def _build_pkcs1_padding_info() -> _BcryptPkcs1PaddingInfo:
 
 
 def _load_dlls() -> tuple[Any, Any]:
-    """Return ``(crypt32, ncrypt)`` DLL handles. Windows-only.
+    """Return ``(crypt32, ncrypt)`` DLL handles with 64-bit-safe signatures.
 
     Lifted into a function so unit tests on non-Windows hosts can patch it
-    to inject mocks.
+    to inject mocks. Argtypes + restype are pinned explicitly so 64-bit
+    pointer-sized handles (HCERTSTORE, PCCERT_CONTEXT, NCRYPT_KEY_HANDLE)
+    don't get truncated to c_int on Win64.
     """
     if sys.platform != "win32":
         raise RuntimeError(
             "cncrypt_signer requires Windows; got platform=" + sys.platform
         )
-    return ctypes.windll.crypt32, ctypes.windll.ncrypt  # pragma: no cover
+    crypt32 = ctypes.windll.crypt32  # pragma: no cover
+    ncrypt = ctypes.windll.ncrypt  # pragma: no cover
+
+    crypt32.CertOpenStore.argtypes = [
+        ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p,
+        ctypes.c_ulong, ctypes.c_void_p,
+    ]
+    crypt32.CertOpenStore.restype = ctypes.c_void_p
+
+    crypt32.CertFindCertificateInStore.argtypes = [
+        ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong,
+        ctypes.c_ulong, ctypes.c_void_p, ctypes.c_void_p,
+    ]
+    crypt32.CertFindCertificateInStore.restype = ctypes.c_void_p
+
+    crypt32.CryptAcquireCertificatePrivateKey.argtypes = [
+        ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p,
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+    ]
+    crypt32.CryptAcquireCertificatePrivateKey.restype = wintypes.BOOL
+
+    crypt32.CertFreeCertificateContext.argtypes = [ctypes.c_void_p]
+    crypt32.CertFreeCertificateContext.restype = wintypes.BOOL
+
+    crypt32.CertCloseStore.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    crypt32.CertCloseStore.restype = wintypes.BOOL
+
+    ncrypt.NCryptSignHash.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong,
+        ctypes.c_void_p, ctypes.c_ulong,
+    ]
+    ncrypt.NCryptSignHash.restype = ctypes.c_long  # SECURITY_STATUS
+
+    ncrypt.NCryptFreeObject.argtypes = [ctypes.c_void_p]
+    ncrypt.NCryptFreeObject.restype = ctypes.c_long
+
+    return crypt32, ncrypt
 
 
 def _thumbprint_to_blob(thumbprint: str) -> tuple[ctypes.Array[ctypes.c_ubyte], _CryptIntegerBlob]:
