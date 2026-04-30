@@ -3493,6 +3493,276 @@ async def resolve_promise(promise_id: str, resolution: str) -> str:
     return json.dumps(promise.to_entry(), indent=2)
 
 
+# ───────────────────────────────────────────────────────────────────────
+# Files (PR1) — read + comment on SharePoint / OneDrive driveItems
+#
+# These tools wrap ``entraclaw.tools.files`` with the standard MCP
+# discipline: ``_initialize`` for auth state, ``_ensure_valid_token``
+# for refresh, ``_with_token_retry`` for transparent re-auth on 401,
+# JSON-only return values. Audit logging is handled inside
+# ``tools.files`` via the ``_audit_graph_call`` helper, so these
+# wrappers stay thin.
+# ───────────────────────────────────────────────────────────────────────
+
+
+def _serialize_file_ref(ref: object) -> dict:
+    from entraclaw.tools.files import FileRef
+
+    assert isinstance(ref, FileRef)
+    return {
+        "drive_id": ref.drive_id,
+        "item_id": ref.item_id,
+        "name": ref.name,
+        "mime_type": ref.mime_type,
+        "kind": ref.kind,
+        "site_id": ref.site_id,
+        "web_url": ref.web_url,
+        "size_bytes": ref.size_bytes,
+    }
+
+
+@mcp.tool()
+async def resolve_file_url(url: str) -> str:
+    """Resolve a SharePoint / OneDrive / shared-link URL to a stable file handle.
+
+    Use this BEFORE ``read_file`` or ``add_file_comment``. The returned
+    handle (a ``FileRef``) carries ``drive_id``, ``item_id``, ``site_id``
+    (for SharePoint) and the file's ``kind`` (sharepoint /
+    onedrive_business / onedrive_personal). Pass that handle to
+    downstream Files tools — they do NOT re-resolve.
+
+    Args:
+        url: A full SharePoint / OneDrive / shared-link URL.
+
+    Returns:
+        JSON with the resolved file handle, or ``{"error": "..."}`` on
+        failure (URL malformed, file not found, permission denied,
+        site denied by operator).
+    """
+    await _initialize()
+    from entraclaw.errors import (
+        FilesError,
+    )
+    from entraclaw.tools.files import resolve_file_url as _resolve
+
+    if not url or not url.strip():
+        return json.dumps({"error": "url is required"})
+
+    await _ensure_valid_token()
+    try:
+        ref = await _with_token_retry(_resolve, url=url.strip())
+    except FilesError as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
+    return json.dumps(_serialize_file_ref(ref), indent=2)
+
+
+@mcp.tool()
+async def list_recent_files(limit: int = 25) -> str:
+    """List files recently shared with the agent (Graph ``/me/drive/sharedWithMe``).
+
+    Returns up to ``limit`` files, post-filtered by the operator
+    site denylist (``ENTRACLAW_FILES_DENIED_SITES``). The ``denied_count``
+    field is the number of files that WERE filtered out — surface
+    that to the user so they know N files exist but are operator-denied.
+
+    Args:
+        limit: Max number of files to return (default 25, must be >= 1).
+
+    Returns:
+        JSON ``{"files": [...], "denied_count": N}`` or ``{"error": "..."}``.
+    """
+    await _initialize()
+    from entraclaw.errors import FilesError
+    from entraclaw.tools.files import list_recent_files as _list
+
+    await _ensure_valid_token()
+    try:
+        page = await _with_token_retry(_list, limit=limit)
+    except FilesError as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+    return json.dumps(
+        {
+            "files": [
+                {
+                    "drive_id": f.drive_id,
+                    "item_id": f.item_id,
+                    "name": f.name,
+                    "web_url": f.web_url,
+                    "mime_type": f.mime_type,
+                    "size_bytes": f.size_bytes,
+                    "modified_at": f.modified_at,
+                    "shared_by": f.shared_by,
+                    "site_id": f.site_id,
+                }
+                for f in page.files
+            ],
+            "denied_count": page.denied_count,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def read_file(
+    drive_id: str,
+    item_id: str,
+    name: str,
+    mime_type: str = "application/octet-stream",
+    kind: str = "sharepoint",
+    site_id: str = "",
+    web_url: str = "",
+    size_bytes: int = 0,
+    as_format: str = "auto",
+) -> str:
+    """Read a SharePoint / OneDrive file as text.
+
+    Pass the ``FileRef`` fields returned from ``resolve_file_url`` or
+    ``list_recent_files`` directly. Supported formats:
+
+    - ``.md`` / ``.txt`` / ``.html`` / ``.htm`` — fetched raw, decoded as UTF-8.
+    - ``.docx`` — converted to PDF via Graph (``?format=pdf``), text
+      extracted via ``pypdf``.
+    - ``.pdf`` — fetched raw, text extracted via ``pypdf``. Files larger
+      than ``ENTRACLAW_FILES_MAX_PDF_BYTES`` (default 50 MiB) are
+      refused BEFORE download.
+
+    Excel and PowerPoint are intentionally rejected — use
+    ``read_workbook_range`` (PR3) for Excel, or paste slide content
+    into chat for PowerPoint.
+
+    Args:
+        drive_id, item_id, name, mime_type, kind, site_id, web_url,
+        size_bytes: ``FileRef`` fields. Pass ``site_id=""`` for OneDrive
+        and ``size_bytes=0`` if unknown.
+        as_format: ``"auto"`` (default) — choose by extension. ``"raw"``
+            forces UTF-8 text decode; only valid for raw-text formats.
+
+    Returns:
+        JSON with extracted text + page_count + truncation flag, or
+        ``{"error": "..."}`` on failure.
+    """
+    await _initialize()
+    from entraclaw.errors import FilesError
+    from entraclaw.tools.files import FileRef
+    from entraclaw.tools.files import read_file as _read
+
+    if not drive_id or not item_id or not name:
+        return json.dumps(
+            {"error": "drive_id, item_id, and name are required"}
+        )
+
+    ref = FileRef(
+        drive_id=drive_id,
+        item_id=item_id,
+        name=name,
+        mime_type=mime_type,
+        kind=kind,  # type: ignore[arg-type]
+        site_id=site_id or None,
+        web_url=web_url or None,
+        size_bytes=size_bytes if size_bytes > 0 else None,
+    )
+
+    await _ensure_valid_token()
+    try:
+        content = await _with_token_retry(
+            _read, file_ref=ref, as_format=as_format  # type: ignore[arg-type]
+        )
+    except FilesError as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
+
+    return json.dumps(
+        {
+            "drive_id": content.drive_id,
+            "item_id": content.item_id,
+            "name": content.name,
+            "mime_type": content.mime_type,
+            "text": content.text,
+            "page_count": content.page_count,
+            "truncated": content.truncated,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def add_file_comment(
+    drive_id: str,
+    item_id: str,
+    name: str,
+    content: str,
+    mime_type: str = "application/octet-stream",
+    kind: str = "sharepoint",
+    site_id: str = "",
+) -> str:
+    """Post a document comment to a Word or Excel file (Files-only).
+
+    Files-only by design — does NOT cross-post to chat. If you want
+    to also reply in Teams chat, call ``send_teams_message`` separately
+    with the comment URL or summary.
+
+    Restrictions:
+    - File must be ``.docx`` or ``.xlsx`` — ``.pptx`` and other formats
+      rejected with ``UnsupportedCommentFormatError``.
+    - Personal OneDrive files rejected (Microsoft beta endpoint does
+      not support them).
+    - Folder driveItems rejected.
+    - Site must not be in ``ENTRACLAW_FILES_DENIED_SITES``.
+
+    Endpoint: ``POST /beta/drives/{drive-id}/items/{item-id}/comments``
+    (Microsoft's beta surface — V1 plan accepts this risk; see
+    ``docs/architecture/PLAN-files-mcp-tools.md`` §"Failure-mode registry").
+
+    Args:
+        drive_id, item_id, name, mime_type, kind, site_id: ``FileRef``
+            fields (from ``resolve_file_url`` or ``list_recent_files``).
+        content: Text of the comment.
+
+    Returns:
+        JSON with ``comment_id``, ``content``, optional ``web_url``;
+        or ``{"error": "..."}``.
+    """
+    await _initialize()
+    from entraclaw.errors import FilesError
+    from entraclaw.tools.files import FileRef
+    from entraclaw.tools.files import add_file_comment as _comment
+
+    if not drive_id or not item_id or not name:
+        return json.dumps(
+            {"error": "drive_id, item_id, and name are required"}
+        )
+    if not content or not content.strip():
+        return json.dumps({"error": "content is required (non-empty)"})
+
+    ref = FileRef(
+        drive_id=drive_id,
+        item_id=item_id,
+        name=name,
+        mime_type=mime_type,
+        kind=kind,  # type: ignore[arg-type]
+        site_id=site_id or None,
+    )
+
+    await _ensure_valid_token()
+    try:
+        result = await _with_token_retry(
+            _comment, file_ref=ref, content=content
+        )
+    except FilesError as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
+
+    return json.dumps(
+        {
+            "comment_id": result.comment_id,
+            "content": result.content,
+            "web_url": result.web_url,
+        },
+        indent=2,
+    )
+
+
 def main() -> None:
     """Entry point for ``entraclaw-mcp`` console script."""
     import anyio

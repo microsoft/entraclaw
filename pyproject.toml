@@ -19,6 +19,7 @@ dependencies = [
     "aiohttp>=3.9.0",
     "botbuilder-core>=4.17.0",
     "botbuilder-integration-aiohttp>=4.17.0",
+    "pypdf>=4.0",
 ]
 
 [project.optional-dependencies]
@@ -51,6 +52,9 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "eval: LLM eval suite for files-mcp scenarios (gates PR1 merge per docs/architecture/PLAN-files-mcp-tools.md §Testing)",
+]
 
 [tool.coverage.run]
 source = ["entraclaw"]

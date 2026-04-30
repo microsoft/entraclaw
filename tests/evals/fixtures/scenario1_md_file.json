@@ -1,0 +1,51 @@
+{
+  "trace": {
+    "name": "scenario1_md_file_no_comment",
+    "description": "User asks to read an .md spec; no comment requested. Confirms .md path skips PDF conversion.",
+    "user_prompt": "summarize this spec for me: https://tenant.sharepoint.com/sites/eng/spec.md",
+    "expected_tools": [
+      "resolve_file_url",
+      "read_file"
+    ],
+    "tool_args": {
+      "resolve_file_url": {"url": "https://tenant.sharepoint.com/sites/eng/spec.md"},
+      "read_file": {"name": "spec.md"}
+    },
+    "expected_output_subset": {
+      "name": "spec.md",
+      "page_count": null,
+      "truncated": false
+    }
+  },
+  "responses": {
+    "routes": [
+      {
+        "method": "GET",
+        "kwargs": {"url__regex": ".*/shares/.*/driveItem"},
+        "response": {
+          "status": 200,
+          "json": {
+            "id": "02MD",
+            "name": "spec.md",
+            "size": 256,
+            "webUrl": "https://tenant.sharepoint.com/sites/eng/spec.md",
+            "file": {"mimeType": "text/markdown"},
+            "parentReference": {
+              "driveId": "b!eng-drive",
+              "siteId": "tenant.sharepoint.com,eng-site,eng-web",
+              "driveType": "documentLibrary"
+            }
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "kwargs": {"url__regex": ".*/drives/b!eng-drive/items/02MD/content$"},
+        "response": {
+          "status": 200,
+          "content": "# Spec\n\nHello, agentic world."
+        }
+      }
+    ]
+  }
+}

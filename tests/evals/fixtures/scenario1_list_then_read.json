@@ -1,0 +1,58 @@
+{
+  "trace": {
+    "name": "scenario1_list_then_resolve",
+    "description": "Sponsor asks 'what specs were shared with me?' — agent calls list_recent_files, then resolves the picked file via resolve_file_url before reading.",
+    "user_prompt": "what specs do I have shared? read the most recent.",
+    "expected_tools": [
+      "list_recent_files",
+      "read_file"
+    ],
+    "tool_args": {
+      "list_recent_files": {"limit": 25},
+      "read_file": {"name": "Latest-Spec.md"}
+    },
+    "expected_output_subset": {
+      "name": "Latest-Spec.md",
+      "page_count": null,
+      "truncated": false
+    }
+  },
+  "responses": {
+    "routes": [
+      {
+        "method": "GET",
+        "kwargs": {"url__regex": ".*/me/drive/sharedWithMe.*"},
+        "response": {
+          "status": 200,
+          "json": {
+            "value": [
+              {
+                "remoteItem": {
+                  "id": "05LATEST",
+                  "name": "Latest-Spec.md",
+                  "size": 4096,
+                  "webUrl": "https://tenant.sharepoint.com/sites/eng/Latest-Spec.md",
+                  "lastModifiedDateTime": "2026-01-15T12:00:00Z",
+                  "file": {"mimeType": "text/markdown"},
+                  "parentReference": {
+                    "driveId": "b!eng-drive",
+                    "siteId": "tenant.sharepoint.com,eng-site,eng-web"
+                  },
+                  "shared": {"sharedBy": {"user": {"displayName": "Alice"}}}
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "kwargs": {"url__regex": ".*/drives/b!eng-drive/items/05LATEST/content$"},
+        "response": {
+          "status": 200,
+          "content": "# Latest spec\nstub body."
+        }
+      }
+    ]
+  }
+}

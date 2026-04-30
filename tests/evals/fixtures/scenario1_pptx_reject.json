@@ -1,0 +1,39 @@
+{
+  "trace": {
+    "name": "scenario1_pptx_rejects_comment",
+    "description": "Sponsor asks to comment on a .pptx. add_file_comment must reject without making any Graph call.",
+    "user_prompt": "add a comment to https://tenant.sharepoint.com/sites/eng/Deck.pptx — 'why slide 7?'",
+    "expected_tools": [
+      "resolve_file_url",
+      "add_file_comment"
+    ],
+    "tool_args": {
+      "resolve_file_url": {"url": "https://tenant.sharepoint.com/sites/eng/Deck.pptx"},
+      "add_file_comment": {"content": "why slide 7?"}
+    },
+    "expected_error": "UnsupportedCommentFormatError"
+  },
+  "responses": {
+    "routes": [
+      {
+        "method": "GET",
+        "kwargs": {"url__regex": ".*/shares/.*/driveItem"},
+        "response": {
+          "status": 200,
+          "json": {
+            "id": "04PPT",
+            "name": "Deck.pptx",
+            "size": 1024,
+            "webUrl": "https://tenant.sharepoint.com/sites/eng/Deck.pptx",
+            "file": {"mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+            "parentReference": {
+              "driveId": "b!eng-drive",
+              "siteId": "tenant.sharepoint.com,eng-site,eng-web",
+              "driveType": "documentLibrary"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

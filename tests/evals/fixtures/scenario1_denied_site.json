@@ -1,0 +1,38 @@
+{
+  "trace": {
+    "name": "scenario1_denied_site_blocks_resolve",
+    "description": "Operator denylist blocks a site. Resolve must raise SiteNotAllowedError before any read.",
+    "user_prompt": "read https://tenant.sharepoint.com/sites/secret/Spec.docx",
+    "expected_tools": [
+      "resolve_file_url"
+    ],
+    "tool_args": {
+      "resolve_file_url": {"url": "https://tenant.sharepoint.com/sites/secret/Spec.docx"}
+    },
+    "expected_error": "SiteNotAllowedError",
+    "denied_sites": "tenant.sharepoint.com,secret-site,secret-web"
+  },
+  "responses": {
+    "routes": [
+      {
+        "method": "GET",
+        "kwargs": {"url__regex": ".*/shares/.*/driveItem"},
+        "response": {
+          "status": 200,
+          "json": {
+            "id": "03DENIED",
+            "name": "Spec.docx",
+            "size": 1024,
+            "webUrl": "https://tenant.sharepoint.com/sites/secret/Spec.docx",
+            "file": {"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+            "parentReference": {
+              "driveId": "b!secret-drive",
+              "siteId": "tenant.sharepoint.com,secret-site,secret-web",
+              "driveType": "documentLibrary"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

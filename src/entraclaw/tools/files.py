@@ -1,0 +1,751 @@
+"""Microsoft Graph Files API — read, comment, list, resolve.
+
+PR1 surface (Scenario 1: read SharePoint spec, comment for clarification):
+
+- ``resolve_file_url`` — share URL → ``FileRef`` (drive_id, item_id, site_id, kind)
+- ``list_recent_files`` — ``/me/drive/sharedWithMe`` with denylist post-filter
+- ``read_file`` — auto-detect format; .md/.txt/.html raw, .docx via PDF
+  conversion + ``pypdf``, .pdf via direct ``pypdf``, .xlsx/.pptx rejected
+- ``add_file_comment`` — Files-only comment (beta endpoint), Word + Excel
+  on OneDrive-Business / SharePoint, rejects .pptx, personal OneDrive,
+  folder driveItems
+
+PR2 (Scenario 2: author + upload + share) and PR3 (Excel reads) ship
+in subsequent commits. This module's contract:
+
+- All public functions are ``async``.
+- All public functions take ``*, token: str, transport=None`` so the
+  MCP wrapper supplies the token from ``acquire_agent_user_token`` and
+  tests can inject a respx-driven transport.
+- 429 retry handled by ``RetryOn429Transport`` (existing). Read tools
+  pass ``allow_5xx_retry=True`` per D6; mutations leave it ``False``
+  (fail-fast on 5xx).
+- Module boundary: never imports ``tools.teams``. The chat-reply leg
+  for D1 is the model's job — call ``add_file_comment`` and
+  ``send_teams_message`` separately.
+- Beta surface isolated to ``add_file_comment`` only — see
+  ``GRAPH_BETA_HOST`` constant.
+- Audit logging via ``_audit_graph_call`` async context manager (DRY).
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import logging
+import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from typing import Literal
+from urllib.parse import urlparse
+
+import httpx
+
+from entraclaw.errors import (
+    FileNotFoundError,
+    FileTooLargeError,
+    GraphFilesError,
+    MissingPermissionError,
+    SiteNotAllowedError,
+    TokenExpiredError,
+    UnsupportedCommentFormatError,
+    UnsupportedReadFormatError,
+    UrlNotResolvableError,
+)
+from entraclaw.tools.audit import log_event
+from entraclaw.tools.rate_limit import RetryOn429Transport
+
+logger = logging.getLogger("entraclaw.tools.files")
+
+GRAPH_V1_HOST = "https://graph.microsoft.com/v1.0"
+GRAPH_BETA_HOST = "https://graph.microsoft.com/beta"  # comments only; isolate
+
+# Default budgets — overridable via env. Plan §"Failure-mode registry":
+# ENTRACLAW_FILES_MAX_TEXT_BYTES (200KB) caps extracted text per
+# read_file; ENTRACLAW_FILES_MAX_PDF_BYTES (50 MiB) refuses to download
+# a PDF exceeding that size (P1).
+DEFAULT_MAX_TEXT_BYTES = 200_000
+DEFAULT_MAX_PDF_BYTES = 52_428_800  # 50 MiB
+
+DriveKind = Literal["onedrive_personal", "onedrive_business", "sharepoint"]
+ReadFormat = Literal["raw", "auto"]
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Public dataclasses
+# ───────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class FileRef:
+    """Stable handle to a driveItem.
+
+    Carries ``site_id`` (eng-review A2): the resolver does the site
+    lookup once and downstream tools (read, comment, share) never
+    re-resolve. ``site_id`` is ``None`` for OneDrive (personal or
+    business) and populated for SharePoint.
+    """
+
+    drive_id: str
+    item_id: str
+    name: str
+    mime_type: str
+    kind: DriveKind
+    site_id: str | None = None
+    web_url: str | None = None
+    size_bytes: int | None = None
+
+
+@dataclass(frozen=True)
+class FileSummary:
+    """One row of ``/me/drive/sharedWithMe``."""
+
+    drive_id: str
+    item_id: str
+    name: str
+    web_url: str
+    mime_type: str
+    size_bytes: int
+    modified_at: str
+    shared_by: str | None
+    site_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RecentFilesPage:
+    """Result of ``list_recent_files``.
+
+    ``denied_count`` (eng-review A2) is the number of files filtered
+    out by the operator denylist — surfaced so the model can tell the
+    user "I see N more files but my operator denied those sites."
+    """
+
+    files: list[FileSummary]
+    denied_count: int
+
+
+@dataclass(frozen=True)
+class FileContent:
+    """Result of ``read_file``."""
+
+    drive_id: str
+    item_id: str
+    name: str
+    mime_type: str
+    text: str
+    page_count: int | None
+    truncated: bool
+
+
+@dataclass(frozen=True)
+class CommentResult:
+    """Result of ``add_file_comment``.
+
+    Files-only after eng-review A1 — there is no chat-reply leg here.
+    The model orchestrates the chat reply with ``send_teams_message``
+    if it wants one.
+    """
+
+    comment_id: str
+    content: str
+    web_url: str | None = None
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Helpers
+# ───────────────────────────────────────────────────────────────────────
+
+
+def _denied_sites() -> frozenset[str]:
+    """Read ``ENTRACLAW_FILES_DENIED_SITES`` as a normalized set.
+
+    Separator is ``;`` (semicolon), NOT comma — Graph site IDs already
+    contain commas (``{host},{site-collection},{web}``).
+    """
+    raw = os.environ.get("ENTRACLAW_FILES_DENIED_SITES", "")
+    return frozenset(s.strip() for s in raw.split(";") if s.strip())
+
+
+def _check_site_allowed(site_id: str | None) -> None:
+    """Raise ``SiteNotAllowedError`` if the site is in the denylist.
+
+    Pure local — no Graph call. ``None`` (OneDrive) is always allowed.
+    """
+    if site_id is None:
+        return
+    denied = _denied_sites()
+    if site_id in denied:
+        raise SiteNotAllowedError(site_id)
+
+
+def _max_text_bytes() -> int:
+    raw = os.environ.get("ENTRACLAW_FILES_MAX_TEXT_BYTES")
+    try:
+        return int(raw) if raw else DEFAULT_MAX_TEXT_BYTES
+    except ValueError:
+        return DEFAULT_MAX_TEXT_BYTES
+
+
+def _max_pdf_bytes() -> int:
+    raw = os.environ.get("ENTRACLAW_FILES_MAX_PDF_BYTES")
+    try:
+        return int(raw) if raw else DEFAULT_MAX_PDF_BYTES
+    except ValueError:
+        return DEFAULT_MAX_PDF_BYTES
+
+
+def _share_id_from_url(url: str) -> str:
+    """Encode ``url`` per Graph's ``/shares/{share-id}`` shape.
+
+    Per https://learn.microsoft.com/en-us/graph/api/shares-get :
+    base64url(url), strip ``=`` padding, prefix with ``u!``.
+    """
+    encoded = base64.urlsafe_b64encode(url.encode("utf-8")).decode("ascii")
+    return "u!" + encoded.rstrip("=")
+
+
+def _classify_drive_kind(parent_ref: dict | None, drive_type: str | None) -> DriveKind:
+    """Decide if a driveItem is OneDrive personal/business or SharePoint.
+
+    Graph's ``parentReference.driveType`` is the canonical source:
+    ``personal``, ``business``, ``documentLibrary`` (SharePoint).
+    ``parentReference.siteId`` being present also indicates SharePoint.
+    """
+    parent_ref = parent_ref or {}
+    site_id = parent_ref.get("siteId")
+    if site_id:
+        return "sharepoint"
+    dt = (drive_type or parent_ref.get("driveType") or "").lower()
+    if dt == "personal":
+        return "onedrive_personal"
+    return "onedrive_business"  # default for missing/business/other
+
+
+def _extension(name: str) -> str:
+    """Lowercase file extension including leading dot, or empty string."""
+    name = name or ""
+    idx = name.rfind(".")
+    if idx < 0:
+        return ""
+    return name[idx:].lower()
+
+
+def _make_transport(*, allow_5xx_retry: bool = False) -> httpx.AsyncBaseTransport:
+    """Wrap a plain httpx transport with the rate-limit retry layer."""
+    return RetryOn429Transport(
+        wrapped=httpx.AsyncHTTPTransport(),
+        allow_5xx_retry=allow_5xx_retry,
+    )
+
+
+def _client(
+    transport: httpx.AsyncBaseTransport | None,
+    *,
+    allow_5xx_retry: bool = False,
+) -> httpx.AsyncClient:
+    """Construct an ``httpx.AsyncClient`` honoring caller-supplied transport.
+
+    Tests inject a respx transport directly (it already mocks the
+    network) — they should pass that transport unwrapped. Production
+    callers leave ``transport=None`` so we wrap the default transport
+    with the rate-limit retry layer.
+    """
+    if transport is None:
+        transport = _make_transport(allow_5xx_retry=allow_5xx_retry)
+    return httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(30.0))
+
+
+@asynccontextmanager
+async def _audit_graph_call(
+    verb: str,
+    resource: str,
+    *,
+    metadata: dict | None = None,
+) -> AsyncIterator[None]:
+    """C3: single audit-log point for every Graph Files call.
+
+    Emits ``outcome="pending"`` before the body runs and ``"success"``
+    or ``"failure"`` after. Replaces nine ad-hoc ``log_event`` blocks.
+    """
+    log_event(
+        action=f"files.{verb}",
+        resource=resource,
+        outcome="pending",
+        metadata=metadata or {},
+    )
+    try:
+        yield
+    except Exception as exc:
+        log_event(
+            action=f"files.{verb}",
+            resource=resource,
+            outcome="failure",
+            metadata={**(metadata or {}), "error": type(exc).__name__, "message": str(exc)},
+        )
+        raise
+    else:
+        log_event(
+            action=f"files.{verb}",
+            resource=resource,
+            outcome="success",
+            metadata=metadata or {},
+        )
+
+
+def _bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _raise_for_files_error(resp: httpx.Response, *, target: str, scope: str) -> None:
+    """Map a non-2xx Graph response onto the FilesError hierarchy."""
+    status = resp.status_code
+    if status == 401:
+        raise TokenExpiredError(
+            "Agent User token expired during Files Graph call — "
+            "re-acquire via three-hop flow"
+        )
+    if status == 404:
+        raise FileNotFoundError(target)
+    if status == 403:
+        raise MissingPermissionError(scope)
+    try:
+        body = resp.json()
+        msg = json.dumps(body)
+    except Exception:
+        msg = resp.text or f"HTTP {status}"
+    raise GraphFilesError(status, msg)
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Tool 1 — resolve_file_url
+# ───────────────────────────────────────────────────────────────────────
+
+
+async def resolve_file_url(
+    url: str,
+    *,
+    token: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> FileRef:
+    """Resolve a SharePoint / OneDrive / shared-link URL to a ``FileRef``.
+
+    Uses ``GET /shares/{share-id}/driveItem`` (eng-review A3) — one
+    call covers SharePoint URLs, OneDrive personal/business URLs, and
+    shared-link URLs, and the response includes ``parentReference.siteId``
+    and ``parentReference.driveId`` for free.
+
+    Errors:
+    - ``UrlNotResolvableError`` — empty / malformed URL
+    - ``FileNotFoundError`` — Graph 404
+    - ``SiteNotAllowedError`` — resolved site is in the operator denylist
+    - ``MissingPermissionError`` — Graph 403
+    """
+    if not url or not isinstance(url, str):
+        raise UrlNotResolvableError(str(url), "empty or non-string URL")
+    parsed = urlparse(url.strip())
+    if not parsed.scheme or not parsed.netloc:
+        raise UrlNotResolvableError(url, "no scheme or hostname")
+    if parsed.scheme not in ("http", "https"):
+        raise UrlNotResolvableError(url, f"unsupported scheme {parsed.scheme!r}")
+
+    share_id = _share_id_from_url(url.strip())
+    request_url = f"{GRAPH_V1_HOST}/shares/{share_id}/driveItem"
+
+    async with _audit_graph_call("resolve_file_url", url):
+        async with _client(transport, allow_5xx_retry=True) as client:
+            resp = await client.get(request_url, headers=_bearer(token))
+
+        if resp.status_code != 200:
+            _raise_for_files_error(resp, target=url, scope="Files.Read")
+
+        data = resp.json()
+        parent_ref = data.get("parentReference") or {}
+        drive_id = parent_ref.get("driveId") or ""
+        item_id = data.get("id") or ""
+        if not drive_id or not item_id:
+            raise UrlNotResolvableError(url, "Graph returned a driveItem without drive_id/item_id")
+
+        site_id = parent_ref.get("siteId") or None
+        kind = _classify_drive_kind(parent_ref, parent_ref.get("driveType"))
+        # Drop the {site}/-style suffix that Graph sometimes adds.
+        if site_id and "," in site_id:
+            # Graph returns "{tenantHost},{siteCollectionId},{siteId}".
+            # Keep the full triple — that's the canonical site identifier.
+            pass
+
+        if site_id:
+            _check_site_allowed(site_id)
+
+        mime = ((data.get("file") or {}).get("mimeType")) or "application/octet-stream"
+        return FileRef(
+            drive_id=drive_id,
+            item_id=item_id,
+            name=str(data.get("name") or ""),
+            mime_type=mime,
+            kind=kind,
+            site_id=site_id,
+            web_url=data.get("webUrl"),
+            size_bytes=data.get("size"),
+        )
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Tool 2 — list_recent_files
+# ───────────────────────────────────────────────────────────────────────
+
+
+def _summary_from_drive_item(item: dict) -> FileSummary | None:
+    """Build a ``FileSummary`` from a ``/sharedWithMe`` row.
+
+    Returns ``None`` for items without a remoteItem facet (folders /
+    non-file shares).
+    """
+    remote = item.get("remoteItem") or item
+    parent_ref = remote.get("parentReference") or {}
+    drive_id = parent_ref.get("driveId") or ""
+    item_id = remote.get("id") or ""
+    file_facet = remote.get("file") or {}
+    if not drive_id or not item_id or not file_facet:
+        return None  # folder or non-file share
+
+    shared_by = None
+    shared_facet = remote.get("shared") or item.get("shared") or {}
+    sharer = (shared_facet.get("sharedBy") or {}).get("user") or {}
+    shared_by = sharer.get("displayName") or sharer.get("email")
+
+    site_id = parent_ref.get("siteId") or None
+    return FileSummary(
+        drive_id=drive_id,
+        item_id=item_id,
+        name=str(remote.get("name") or ""),
+        web_url=str(remote.get("webUrl") or ""),
+        mime_type=str(file_facet.get("mimeType") or "application/octet-stream"),
+        size_bytes=int(remote.get("size") or 0),
+        modified_at=str(remote.get("lastModifiedDateTime") or ""),
+        shared_by=shared_by,
+        site_id=site_id,
+    )
+
+
+async def list_recent_files(
+    limit: int = 25,
+    *,
+    token: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> RecentFilesPage:
+    """List files recently shared with the Agent User.
+
+    Calls ``/me/drive/sharedWithMe`` and post-filters with the
+    operator denylist; ``denied_count`` (eng-review A2) is surfaced on
+    the result so the model can tell the user "N more files exist on
+    sites my operator denied."
+    """
+    if limit < 1:
+        raise ValueError("limit must be >= 1")
+    request_url = f"{GRAPH_V1_HOST}/me/drive/sharedWithMe?$top={limit}"
+
+    files: list[FileSummary] = []
+    denied_count = 0
+
+    async with _audit_graph_call("list_recent_files", "me/drive/sharedWithMe"):
+        async with _client(transport, allow_5xx_retry=True) as client:
+            resp = await client.get(request_url, headers=_bearer(token))
+
+        if resp.status_code != 200:
+            _raise_for_files_error(
+                resp, target="sharedWithMe", scope="Files.Read.All"
+            )
+
+        denied = _denied_sites()
+        for raw in resp.json().get("value", []):
+            summary = _summary_from_drive_item(raw)
+            if summary is None:
+                continue
+            if summary.site_id and summary.site_id in denied:
+                denied_count += 1
+                continue
+            files.append(summary)
+
+    return RecentFilesPage(files=files, denied_count=denied_count)
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Tool 3 — read_file
+# ───────────────────────────────────────────────────────────────────────
+
+
+# Extensions read raw as text/markdown.
+_RAW_TEXT_EXTENSIONS: frozenset[str] = frozenset({".md", ".txt", ".html", ".htm"})
+
+# Extensions rejected with a hint to the right tool / chat fallback.
+_EXCEL_EXTENSIONS: frozenset[str] = frozenset({".xlsx", ".xls", ".xlsm"})
+_PPT_EXTENSIONS: frozenset[str] = frozenset({".pptx", ".ppt"})
+
+
+def _extract_pdf_text(data: bytes) -> tuple[str, int]:
+    """Return ``(text, page_count)`` from PDF bytes via pypdf.
+
+    ``pypdf`` is in the V1 dep set; if a future caller needs an
+    alternative, swap here. Intentionally lazy-imported so tests that
+    don't read PDFs don't pay the import cost.
+    """
+    from io import BytesIO
+
+    import pypdf
+
+    reader = pypdf.PdfReader(BytesIO(data))
+    pages = [page.extract_text() or "" for page in reader.pages]
+    return ("\n\n".join(pages), len(pages))
+
+
+def _truncate(text: str, *, max_bytes: int) -> tuple[str, bool]:
+    """Truncate ``text`` so its UTF-8 encoding is at most ``max_bytes``."""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text, False
+    truncated = encoded[:max_bytes].decode("utf-8", errors="ignore")
+    return truncated, True
+
+
+async def _check_size_or_raise(
+    *,
+    client: httpx.AsyncClient,
+    file_ref: FileRef,
+    token: str,
+) -> int:
+    """GET /items/{id} for ``size``. Raises ``FileTooLargeError`` if over the cap."""
+    if file_ref.size_bytes is not None:
+        size = file_ref.size_bytes
+    else:
+        meta_url = (
+            f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}"
+            "?$select=size"
+        )
+        resp = await client.get(meta_url, headers=_bearer(token))
+        if resp.status_code != 200:
+            _raise_for_files_error(
+                resp,
+                target=f"{file_ref.drive_id}:{file_ref.item_id}",
+                scope="Files.Read",
+            )
+        size = int(resp.json().get("size") or 0)
+    cap = _max_pdf_bytes()
+    if size > cap:
+        raise FileTooLargeError(size, cap)
+    return size
+
+
+async def read_file(
+    file_ref: FileRef,
+    *,
+    as_format: ReadFormat = "auto",
+    token: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> FileContent:
+    """Read a file's contents as text.
+
+    Format policy (eng-review A2: ``file_ref`` carries ``site_id`` →
+    one denylist check, no re-resolve):
+
+    - ``.md`` / ``.txt`` / ``.html`` / ``.htm`` → fetch raw, decode, return text
+    - ``.docx`` → ``GET /content?format=pdf``, extract via ``pypdf``
+    - ``.pdf`` → fetch raw, extract via ``pypdf`` (size-checked first, P1)
+    - ``.xlsx`` / ``.xls`` → reject (use ``read_workbook_range`` — PR3)
+    - ``.pptx`` / ``.ppt`` → reject (paste content into chat instead)
+    - everything else → reject
+
+    Raises ``FileTooLargeError`` if the file exceeds
+    ``ENTRACLAW_FILES_MAX_PDF_BYTES`` (default 50 MiB) — checked
+    *before* the body download. Raises ``SiteNotAllowedError`` if
+    ``file_ref.site_id`` is in the operator denylist.
+    """
+    _check_site_allowed(file_ref.site_id)
+
+    ext = _extension(file_ref.name)
+    resource = f"{file_ref.drive_id}:{file_ref.item_id}"
+
+    if ext in _EXCEL_EXTENSIONS:
+        raise UnsupportedReadFormatError(
+            ext, "Use read_workbook_range for Excel data (PR3)."
+        )
+    if ext in _PPT_EXTENSIONS:
+        raise UnsupportedReadFormatError(
+            ext,
+            "PowerPoint reading is not supported in V1; ask the user "
+            "to paste slide content into chat.",
+        )
+    if ext not in _RAW_TEXT_EXTENSIONS and ext not in {".pdf", ".docx"}:
+        raise UnsupportedReadFormatError(
+            ext or "(no extension)",
+            "Only .md/.txt/.html, .pdf, and .docx are supported in V1.",
+        )
+
+    async with _audit_graph_call(
+        "read_file",
+        resource,
+        metadata={"name": file_ref.name, "extension": ext, "as_format": as_format},
+    ), _client(transport, allow_5xx_retry=True) as client:
+        page_count: int | None = None
+
+        if ext in _RAW_TEXT_EXTENSIONS:
+            content_url = (
+                f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}"
+                f"/items/{file_ref.item_id}/content"
+            )
+            resp = await client.get(content_url, headers=_bearer(token))
+            if resp.status_code not in (200, 302):
+                _raise_for_files_error(resp, target=resource, scope="Files.Read")
+            # httpx auto-follows redirects; resp.content is the file body.
+            text = resp.content.decode("utf-8", errors="replace")
+
+        elif ext == ".pdf":
+            # P1: refuse to download PDFs over the size cap.
+            await _check_size_or_raise(
+                client=client, file_ref=file_ref, token=token
+            )
+            content_url = (
+                f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}"
+                f"/items/{file_ref.item_id}/content"
+            )
+            resp = await client.get(content_url, headers=_bearer(token))
+            if resp.status_code != 200:
+                _raise_for_files_error(resp, target=resource, scope="Files.Read")
+            text, page_count = _extract_pdf_text(resp.content)
+
+        else:  # .docx via PDF conversion
+            content_url = (
+                f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}"
+                f"/items/{file_ref.item_id}/content?format=pdf"
+            )
+            resp = await client.get(content_url, headers=_bearer(token))
+            if resp.status_code != 200:
+                _raise_for_files_error(resp, target=resource, scope="Files.Read")
+            pdf_bytes = resp.content
+            cap = _max_pdf_bytes()
+            if len(pdf_bytes) > cap:
+                raise FileTooLargeError(len(pdf_bytes), cap)
+            text, page_count = _extract_pdf_text(pdf_bytes)
+
+        text, truncated = _truncate(text, max_bytes=_max_text_bytes())
+
+        return FileContent(
+            drive_id=file_ref.drive_id,
+            item_id=file_ref.item_id,
+            name=file_ref.name,
+            mime_type=file_ref.mime_type,
+            text=text,
+            page_count=page_count,
+            truncated=truncated,
+        )
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Tool 4 — add_file_comment
+# ───────────────────────────────────────────────────────────────────────
+
+
+_COMMENT_SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".docx", ".xlsx"})
+
+
+async def add_file_comment(
+    file_ref: FileRef,
+    content: str,
+    *,
+    token: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> CommentResult:
+    """Add a document comment to a Word or Excel file (BETA endpoint).
+
+    Files-only after eng-review A1 — there is no chat-reply leg here.
+    The model orchestrates the chat reply via ``send_teams_message``.
+
+    Reject conditions (eng-review A5, raise ``UnsupportedCommentFormatError``):
+
+    - File extension not in ``{.docx, .xlsx}`` (rejects .pptx, .pdf, .md)
+    - ``file_ref.kind == "onedrive_personal"`` (Microsoft does not GA
+      personal-OneDrive comments)
+    - ``file_ref.mime_type`` indicates a folder
+
+    Endpoint: ``POST /beta/drives/{drive-id}/items/{item-id}/comments``
+    (eng-review A4 — Microsoft's beta surface uses one path for both
+    Word and Excel; the older ``/workbook/comments`` /
+    ``/document/comments`` shapes from earlier drafts are wrong).
+    """
+    if not content or not isinstance(content, str):
+        raise UnsupportedCommentFormatError("content is empty or non-string")
+
+    _check_site_allowed(file_ref.site_id)
+
+    ext = _extension(file_ref.name)
+
+    # A5 reject: folder
+    if (file_ref.mime_type or "").lower() in (
+        "folder",
+        "application/vnd.microsoft.graph.folder",
+    ):
+        raise UnsupportedCommentFormatError(
+            "cannot comment on a folder driveItem"
+        )
+
+    # A5 reject: format
+    if ext not in _COMMENT_SUPPORTED_EXTENSIONS:
+        raise UnsupportedCommentFormatError(
+            f"file extension {ext or '(none)'} does not support comments — "
+            "only .docx and .xlsx files can receive document comments"
+        )
+
+    # A5 reject: personal OneDrive
+    if file_ref.kind == "onedrive_personal":
+        raise UnsupportedCommentFormatError(
+            "comments on personal OneDrive files are not GA in Graph; "
+            "ask the user to share the file from OneDrive-for-Business "
+            "or SharePoint"
+        )
+
+    resource = f"{file_ref.drive_id}:{file_ref.item_id}"
+    request_url = (
+        f"{GRAPH_BETA_HOST}/drives/{file_ref.drive_id}"
+        f"/items/{file_ref.item_id}/comments"
+    )
+    payload = {"content": {"contentType": "text", "content": content}}
+
+    async with _audit_graph_call(
+        "add_file_comment",
+        resource,
+        metadata={"extension": ext, "kind": file_ref.kind, "site_id": file_ref.site_id},
+    ):
+        async with _client(transport, allow_5xx_retry=False) as client:
+            resp = await client.post(
+                request_url,
+                json=payload,
+                headers={**_bearer(token), "Content-Type": "application/json"},
+            )
+
+        if resp.status_code not in (200, 201):
+            _raise_for_files_error(resp, target=resource, scope="Files.ReadWrite")
+
+        body = resp.json()
+        comment_content = (body.get("content") or {}).get("content") or content
+        return CommentResult(
+            comment_id=str(body.get("id") or ""),
+            content=str(comment_content),
+            web_url=body.get("webUrl"),
+        )
+
+
+__all__ = [
+    "GRAPH_V1_HOST",
+    "GRAPH_BETA_HOST",
+    "DEFAULT_MAX_PDF_BYTES",
+    "DEFAULT_MAX_TEXT_BYTES",
+    "FileRef",
+    "FileSummary",
+    "RecentFilesPage",
+    "FileContent",
+    "CommentResult",
+    "resolve_file_url",
+    "list_recent_files",
+    "read_file",
+    "add_file_comment",
+]

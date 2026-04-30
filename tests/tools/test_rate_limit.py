@@ -123,3 +123,146 @@ class TestRetryOn429Transport:
         async with httpx.AsyncClient(transport=transport) as client:
             resp = await client.get("https://graph.microsoft.com/v1.0/me")
         assert resp.status_code == 500
+
+
+class TestAllow5xxRetry:
+    """Files PR1 extension: ``allow_5xx_retry`` opt-in for read tools (D6).
+
+    The flag defaults to ``False`` so existing email/teams calls keep their
+    fail-fast-on-5xx semantics — the regression case
+    ``test_non_429_errors_pass_through`` above proves it.
+    """
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_default_does_not_retry_5xx(self) -> None:
+        """REGRESSION: default ``allow_5xx_retry=False`` must NOT retry on 503."""
+        call_count = 0
+
+        def handler(request):
+            nonlocal call_count
+            call_count += 1
+            return httpx.Response(503)
+
+        respx.get("https://graph.microsoft.com/v1.0/me").mock(side_effect=handler)
+        transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+        async with httpx.AsyncClient(transport=transport) as client:
+            resp = await client.get("https://graph.microsoft.com/v1.0/me")
+        assert resp.status_code == 503
+        assert call_count == 1, "default must not retry 5xx (regression for email/teams)"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_retries_503_then_succeeds(self, monkeypatch) -> None:
+        """503 followed by 200 — retries once and returns the success."""
+        from entraclaw.tools import rate_limit
+
+        # Zero-delay backoff for test speed.
+        monkeypatch.setattr(rate_limit, "RETRY_5XX_BASE_DELAYS_S", (0.0, 0.0, 0.0))
+
+        respx.get("https://graph.microsoft.com/v1.0/me/drive/sharedWithMe").mock(
+            side_effect=[
+                httpx.Response(503),
+                httpx.Response(200, json={"value": []}),
+            ]
+        )
+        transport = RetryOn429Transport(
+            wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True
+        )
+        async with httpx.AsyncClient(transport=transport) as client:
+            resp = await client.get(
+                "https://graph.microsoft.com/v1.0/me/drive/sharedWithMe"
+            )
+        assert resp.status_code == 200
+        assert resp.json() == {"value": []}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_retries_502_504_alongside_503(self, monkeypatch) -> None:
+        """502 and 504 are also retried when allow_5xx_retry=True."""
+        from entraclaw.tools import rate_limit
+
+        monkeypatch.setattr(rate_limit, "RETRY_5XX_BASE_DELAYS_S", (0.0, 0.0, 0.0))
+
+        respx.get("https://graph.microsoft.com/v1.0/me").mock(
+            side_effect=[
+                httpx.Response(502),
+                httpx.Response(504),
+                httpx.Response(200, json={"id": "ok"}),
+            ]
+        )
+        transport = RetryOn429Transport(
+            wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True
+        )
+        async with httpx.AsyncClient(transport=transport) as client:
+            resp = await client.get("https://graph.microsoft.com/v1.0/me")
+        assert resp.status_code == 200
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_5xx_retry_exhausted_returns_last_response(self, monkeypatch) -> None:
+        """After 3 5xx retries, the last 5xx response is returned (fail clean)."""
+        from entraclaw.tools import rate_limit
+
+        monkeypatch.setattr(rate_limit, "RETRY_5XX_BASE_DELAYS_S", (0.0, 0.0, 0.0))
+
+        respx.get("https://graph.microsoft.com/v1.0/me").mock(
+            side_effect=[
+                httpx.Response(503),
+                httpx.Response(503),
+                httpx.Response(503),
+                httpx.Response(503),
+            ]
+        )
+        transport = RetryOn429Transport(
+            wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True
+        )
+        async with httpx.AsyncClient(transport=transport) as client:
+            resp = await client.get("https://graph.microsoft.com/v1.0/me")
+        assert resp.status_code == 503
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_500_not_retried_even_with_flag(self, monkeypatch) -> None:
+        """500 is *not* in the transient-5xx set — only 502/503/504 retry."""
+        from entraclaw.tools import rate_limit
+
+        monkeypatch.setattr(rate_limit, "RETRY_5XX_BASE_DELAYS_S", (0.0, 0.0, 0.0))
+
+        call_count = 0
+
+        def handler(request):
+            nonlocal call_count
+            call_count += 1
+            return httpx.Response(500)
+
+        respx.get("https://graph.microsoft.com/v1.0/me").mock(side_effect=handler)
+        transport = RetryOn429Transport(
+            wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True
+        )
+        async with httpx.AsyncClient(transport=transport) as client:
+            resp = await client.get("https://graph.microsoft.com/v1.0/me")
+        assert resp.status_code == 500
+        assert call_count == 1, "500 (Internal Server Error) is not transient"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_429_and_5xx_compose(self, monkeypatch) -> None:
+        """Sequential 429 then 503 then 200 — both retry paths fire."""
+        from entraclaw.tools import rate_limit
+
+        monkeypatch.setattr(rate_limit, "RETRY_5XX_BASE_DELAYS_S", (0.0, 0.0, 0.0))
+
+        respx.get("https://graph.microsoft.com/v1.0/me").mock(
+            side_effect=[
+                httpx.Response(429, headers={"Retry-After": "0"}),
+                httpx.Response(503),
+                httpx.Response(200, json={"ok": True}),
+            ]
+        )
+        transport = RetryOn429Transport(
+            wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True
+        )
+        async with httpx.AsyncClient(transport=transport) as client:
+            resp = await client.get("https://graph.microsoft.com/v1.0/me")
+        assert resp.status_code == 200

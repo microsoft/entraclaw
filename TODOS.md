@@ -70,6 +70,43 @@ Enumerate Conditional Access policies applicable to the Agent User and flag any 
 - **Depends on:** Admin with `Policy.Read.All` Graph scope available to the provisioner token
 - **Source:** Eng review of GitHub OIDC federation design, 2026-04-23 (Premise P3/P5 surfaced the need)
 
+### Files MCP — `search_files` + `list_sites` (KQL site search + site enumeration)
+Cut from PR1 of `PLAN-files-mcp-tools.md` to keep the permission scope of PR1 coherent (`Files.ReadWrite.All` only). Adding these requires consenting `Sites.Read.All` on the Agent Identity app registration. Adds two MCP tools mirroring the rest of `tools/files.py`. Useful when the agent doesn't have a URL to start from and needs to discover relevant specs by topic.
+- **Effort:** S (CC: ~S) — two more tools matching the established shape
+- **Depends on:** PR1 of files plan ships first
+- **Source:** Eng review of PLAN-files-mcp-tools.md (2026-04-30)
+- **See:** `docs/architecture/PLAN-files-mcp-tools.md` §"Deferred / TODOs"
+
+### Files MCP — Excel writes (`excel_write_range`, `excel_append_table_rows`) + workbook session manager
+V1.1 follow-up to PR3 (read-only workbook). Adds write capability for Excel ranges and table rows. Workbook session manager batches multiple range operations into a single `workbook` session for performance. Significant Graph API surface for the workbook write endpoints.
+- **Effort:** M (CC: ~M)
+- **Depends on:** PR3 of files plan ships first (read-only workbook + session lifecycle helper)
+- **Source:** Eng review of PLAN-files-mcp-tools.md (2026-04-30)
+
+### Files MCP — Webhook subscriptions for comment-reply notifications
+V1.1 currently uses `_background_poll_comments()` at 60s interval for comment replies. Webhook subscriptions on commented driveItems would drop latency to seconds and remove the 60s poll. Requires `subscriptions.create` + tunnel/endpoint for the webhook callback (or use the existing notification channel infra).
+- **Effort:** M (CC: ~M)
+- **Depends on:** PR1 of files plan ships first; comment-reply polling needs to exist before webhooks replace it
+- **Source:** Eng review of PLAN-files-mcp-tools.md (2026-04-30)
+
+### Files MCP — `unshare_file` for clean revocation
+`share_file` records the Graph permission ID in the audit log per the failure-mode registry. `unshare_file(drive_id, item_id, permission_id)` calls `DELETE /drives/{drive-id}/items/{item-id}/permissions/{permission-id}` to revoke. Useful when the user says "stop sharing yesterday's draft."
+- **Effort:** S (CC: ~S)
+- **Depends on:** PR2 of files plan ships first
+- **Source:** Eng review of PLAN-files-mcp-tools.md (2026-04-30)
+
+### Files MCP — Office-format authoring (.docx / .xlsx / .pptx) — V2 plan
+Deferred to V2 per CEO D2 (HOLD SCOPE on V1). Template + IR + renderer pipeline architecture documented in `docs/architecture/PLAN-files-llm-authoring-v2.md`. PowerPoint authoring in particular needs `python-pptx`. Significantly more surface than V1's Markdown-only authoring.
+- **Effort:** L (CC: ~L)
+- **Depends on:** V1 (PR1 + PR2 + PR3) ships and stabilizes
+- **Source:** CEO review D2 → V2 plan stub
+- **See:** `docs/architecture/PLAN-files-llm-authoring-v2.md`
+
+### Files MCP — Site / library creation tools
+Not in V1 — `tools/files.py` only operates on existing sites and libraries. Tools for creating new SharePoint sites or document libraries would mirror `POST /sites/{parent-id}/sites` and `POST /sites/{site-id}/lists`. Mostly an admin operation; rare for an agent.
+- **Effort:** S (CC: ~S)
+- **Source:** Eng review of PLAN-files-mcp-tools.md (2026-04-30)
+
 ### Generalize OIDC federation test-fixture pattern (`tests/conftest.py`)
 Extract the Hop 4 / OIDC-federation fixture pattern (parametrized `mock_token_endpoint` routing by `grant_type`, `mock_sso_driver`, `mock_oidc_rp_callback`) into session-scoped conftest fixtures keyed by target SaaS. Each future federated target (Slack, Jira, Linear, Copilot Workspace) then adds tests in ~10 lines of test-data instead of ~300 lines of test-machinery. Write the conftest AFTER GitHub fixtures stabilize (so we're generalizing from working code, not imagined code).
 - **Effort:** S (CC: ~S) — one conftest module + documentation in a platform-learning doc

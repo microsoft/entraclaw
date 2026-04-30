@@ -601,11 +601,15 @@ def grant_agent_user_consent(
     #   Chat.*, ChatMessage.Send  — Teams chat send/read/manage (the original use case)
     #   User.Read                 — basic profile lookup
     #   Files.ReadWrite           — OneDrive file ops (e.g., upload PDFs, share links)
+    #   Files.Read.All            — SharedWithMe + cross-drive reads (Files MCP V1 PR1)
+    #   Sites.Read.All            — SharePoint site/driveItem reads (Files MCP V1 PR1)
+    #   Sites.ReadWrite.All       — POST /beta/.../comments on SharePoint files (Files MCP V1 PR1)
     #   Mail.Read                 — read Agent User's mailbox (inbound email)
     #   Mail.Send                 — send email from Agent User (e.g., daily activity summary)
     scopes = (
         "Chat.Create Chat.ReadWrite ChatMessage.Send User.Read "
-        "Files.ReadWrite Mail.Read Mail.Send"
+        "Files.ReadWrite Files.Read.All Sites.Read.All Sites.ReadWrite.All "
+        "Mail.Read Mail.Send"
     )
     required_scopes = set(scopes.split())
 
