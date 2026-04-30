@@ -1725,7 +1725,6 @@ async def send_teams_message(
     )
     from entraclaw.tools.teams import filter_human_messages, read
     from entraclaw.tools.wait_tool import (
-        WaitForSponsorDmResult,
         wait_listener_banner,
         wait_loop,
     )
