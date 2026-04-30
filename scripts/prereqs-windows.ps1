@@ -1,4 +1,4 @@
-﻿# requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   EntraClaw — Windows prerequisite installer.
