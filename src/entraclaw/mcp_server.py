@@ -1566,7 +1566,6 @@ async def send_teams_message(
     content_type: str = "html",
     mentions: list[dict] | None = None,
     chat_id: str = "",
-    wait_for_reply: bool = True,
     ctx: Context | None = None,
 ) -> str:
     """Send a message via Microsoft Teams, then listen for the reply.
@@ -1580,8 +1579,7 @@ async def send_teams_message(
     automatically blocks after sending until the human sponsor DMs back
     in the same chat — the sponsor's reply is returned in the result.
     This is transparent on Claude Code (which has notifications/channel
-    push) — the tool returns immediately there. Pass
-    ``wait_for_reply=False`` to force fire-and-forget on any host.
+    push) — the tool returns immediately there.
 
     The auto-wait uses the same mechanism as ``wait_for_sponsor_dm``
     (sponsor-gated polling with the dog animation) but is built into
@@ -1614,9 +1612,6 @@ async def send_teams_message(
         content_type: "html" (default) or "text" — see note above.
         mentions: Optional list of mention dicts for @mentions.
         chat_id: The chat to send to. Required.
-        wait_for_reply: Block until the sponsor replies. Defaults True
-            on non-Claude-Code hosts, ignored (no-op) on Claude Code.
-            Pass False for fire-and-forget notifications.
 
     Returns:
         JSON with message_id, sent_at, and (when waiting) the sponsor's
@@ -1695,7 +1690,7 @@ async def send_teams_message(
     cached = str(_state.get("cached_host") or "")
     has_channel_push = host in _CHANNEL_PUSH_HOSTS or cached in _CHANNEL_PUSH_HOSTS
 
-    should_wait = wait_for_reply and not has_channel_push
+    should_wait = not has_channel_push
 
     if not should_wait:
         return json.dumps(result, indent=2)
