@@ -1689,6 +1689,16 @@ async def send_teams_message(
         },
     )
 
+    # Nudge: append a next-step hint so hosts that don't surface MCP
+    # server instructions (e.g. Copilot CLI) still know to call
+    # wait_for_sponsor_dm after proactive DMs.
+    if isinstance(result, dict):
+        result["next_step"] = (
+            "If this DM expects a reply from the human, call "
+            "wait_for_sponsor_dm now — it blocks until the sponsor "
+            "DMs back and returns their message as your next-turn input."
+        )
+
     return json.dumps(result, indent=2)
 
 
