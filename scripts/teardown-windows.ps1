@@ -1,5 +1,4 @@
-﻿#Requires -Version 7.0
-<#
+﻿<#
 .SYNOPSIS
   EntraClaw — Windows teardown. Reverse of setup-windows.ps1.
 
@@ -19,6 +18,26 @@
 
 [CmdletBinding()]
 param([switch]$Force, [switch]$Help)
+
+# Detect the "blue Windows PowerShell 5.1 vs black PowerShell 7" trap before
+# strict mode trips on PS-7-only automatic variables ($IsWindows, $IsLinux).
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Host ""
+    Write-Host "ERROR: This script needs PowerShell 7+, but you launched it from" -ForegroundColor Red
+    Write-Host "       Windows PowerShell $($PSVersionTable.PSVersion)." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Two different products on Windows — easy to confuse:" -ForegroundColor Yellow
+    Write-Host "  - 'Windows PowerShell' (blue icon, pre-installed) is 5.1, NOT this." -ForegroundColor Yellow
+    Write-Host "  - 'PowerShell' / pwsh (black icon, separate install) is 7+, USE THIS." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "How to fix:" -ForegroundColor Cyan
+    Write-Host "  Close this window. Open Start, type 'pwsh' (NOT 'PowerShell'),"
+    Write-Host "  pick the result with the BLACK icon, and re-run the same command."
+    Write-Host ""
+    Write-Host "  If pwsh is missing, run scripts\prereqs-windows.ps1 first to install it."
+    Write-Host ""
+    exit 1
+}
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
