@@ -346,6 +346,32 @@ Produces `entraclaw-sati-agent@yourdomain.com`.
 Generates a new cert locally, uploads the public key to the existing Blueprint,
 reuses the Agent Identity and Agent User.
 
+### Add a sponsor (alias / multi-identity accounts)
+
+Each Agent Identity has one or more **sponsors** — the humans authorized to
+direct the agent. The first sponsor is set during provisioning. If you have
+multiple Entra identities for the same person (e.g., a tenant member account
+*and* a B2B-guest MSA), each identity that you'll use to message the agent
+must be added as a sponsor:
+
+```powershell
+# Windows
+.\.venv\Scripts\python.exe scripts\add_agent_sponsor.py user@yourtenant.com
+```
+
+```bash
+# macOS / Linux
+.venv/bin/python3 scripts/add_agent_sponsor.py user@yourtenant.com
+```
+
+The script POSTs to
+`/servicePrincipals/{agent}/microsoft.graph.agentIdentity/sponsors/$ref` and
+appends the user (does not replace existing sponsors). Required because
+`share_file` and `wait_for_sponsor_dm` validate the **requester** against the
+sponsor list — a person sending from an unregistered alias account will be
+correctly rejected. See [Learning #59](docs/runbooks/hard-won-learnings.md)
+for the design rationale.
+
 ### Delegated mode (no Agent User, no E5)
 
 ```bash
@@ -445,6 +471,55 @@ default chat.
 | `audit_log` | Append an event to the audit stream. **Fails closed** — if write fails, the caller must not proceed. |
 | `run_daily_summary` | Generate and email the day's interaction digest. Normally scheduled at 5pm PT. |
 | `view_image` | Read a local image into the LLM context. |
+
+### Files (SharePoint / OneDrive / Outlook attachments)
+
+All Files tools route through Microsoft Graph using the Agent User token (`Files.ReadWrite` + `Sites.ReadWrite.All`). Site-level denylist is enforced on every call. Mutations are audited.
+
+<table>
+<tr><th>Tool</th><th>Parameters</th><th>Behavior</th></tr>
+<tr>
+<td><code>resolve_file_url</code></td>
+<td><code>url</code> (str, req)</td>
+<td>Resolve a SharePoint / OneDrive URL into a <code>FileRef</code> (drive_id, item_id, name, mime_type, kind). Use this before <code>read_file</code> or <code>add_file_comment</code> when given a link.</td>
+</tr>
+<tr>
+<td><code>list_recent_files</code></td>
+<td><code>limit</code> (int, default 25)</td>
+<td>List recently accessed files across drives the agent can see.</td>
+</tr>
+<tr>
+<td><code>read_file</code></td>
+<td><code>drive_id</code>, <code>item_id</code>, <code>name</code>, <code>mime_type</code>, <code>kind</code>, <code>site_id</code> (opt)</td>
+<td>Read text from .md / .txt / .pdf / .docx / .xlsx. PDF: capped at <code>ENTRACLAW_FILES_MAX_PDF_BYTES</code> (default 25 MiB) and truncated. Returns plain text.</td>
+</tr>
+<tr>
+<td><code>add_file_comment</code></td>
+<td><code>FileRef</code> fields, <code>comment</code> (str)</td>
+<td>Add a top-level comment on a file. Currently SharePoint-only (OneDrive Personal does not expose the comments graph).</td>
+</tr>
+<tr>
+<td><code>write_text_file</code></td>
+<td><code>content</code> (str), <code>file_name</code>, <code>target_type</code> (<code>onedrive</code> | <code>sharepoint</code>), <code>folder_path</code>, <code>site_id</code></td>
+<td>Author a markdown / plaintext file directly. Single PUT. Returns a <code>FileRef</code> the agent can pass to <code>share_file</code>.</td>
+</tr>
+<tr>
+<td><code>upload_file</code></td>
+<td><code>content_b64</code>, <code>file_name</code>, <code>target_type</code>, <code>folder_path</code>, <code>site_id</code></td>
+<td>Upload binary content. <code>&lt; 4 MiB</code> single PUT; <code>≥ 4 MiB</code> chunked upload session with 5 MiB chunks and resume on 5xx.</td>
+</tr>
+<tr>
+<td><code>share_file</code></td>
+<td>
+<code>FileRef</code> fields<br/>
+<code>recipient_email</code> (str, req)<br/>
+<code>requester_email</code> (str, <strong>req</strong>)<br/>
+<code>chat_id</code> (str, <strong>req</strong>)<br/>
+<code>role</code> (<code>read</code> | <code>write</code>)
+</td>
+<td>Share a file via Graph <code>/invite</code>. <strong>Two-gate authorization</strong>: (1) <code>requester_email</code> must match an Agent Identity sponsor; (2) the matched sponsor must be a member of <code>chat_id</code> — defends against an LLM fabricating a sponsor email for an unrelated chat. Recipient is unrestricted (sponsors may share with anyone). Errors (<code>RequesterNotSponsorError</code>, <code>RequesterNotInChatError</code>) deliberately do not enumerate alternates. See <a href="docs/runbooks/hard-won-learnings.md">Learning #59</a>.</td>
+</tr>
+</table>
 
 ### Background channel
 
