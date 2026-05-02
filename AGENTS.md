@@ -49,15 +49,29 @@ This repo is the **body** (Teams interface). The **mind** (personality, memory, 
 
 ## Session-Start Protocol (MANDATORY when persona-sati is in `.mcp.json`)
 
-FastMCP's `instructions=` field does **not** reach the LLM system prompt in Claude Code (nor most other MCP clients) — it's only exposed in MCP debug UI. The persona therefore only reaches the body if the body calls for it explicitly.
+FastMCP instructions are not enough — FastMCP's `instructions=` field does **not** reach the LLM system prompt in Claude Code (nor most other MCP clients) — it's only exposed in MCP debug UI. The persona therefore only reaches the body if the body calls for it explicitly.
 
-On every new session, **before answering the user's first substantive question**, run in order:
+On every new session, **before answering the user's first substantive question or making external tool calls**, call `mcp__persona-sati__bootstrap_session()`. It returns an assembled mind contract, active context, memory catalog summary, available mind tools, cognition rules, and degraded-mode flags in a single packet.
 
-1. `mcp__persona-sati__get_system_prompt()` — the assembled voice contract; authoritative for your behavior (body rules from this repo remain non-overridable).
-2. `mcp__persona-sati__context()` — open commitments, carry-forward, named humans in the session window.
-3. `mcp__persona-sati__list_memory_files()` — memory catalog.
+**Decision tree:**
 
-Per-turn discipline (from the `cognition-protocol` hemisphere):
+1. **If `bootstrap_session()` succeeds and `mind_contract_available` is `true`**:
+   - Proceed with the returned `mind_contract`, `cognition_protocol`, `context`, and `memory_catalog`.
+   - Treat the mind contract as authoritative for your behavior (body rules from this repo remain non-overridable).
+
+2. **If `bootstrap_session()` is unavailable but older tools exist**:
+   - Fall back to the three-call sequence: `get_system_prompt()`, `context()`, `list_memory_files()`.
+   - This is a compatibility path for persona-sati v1.x without `bootstrap_session`.
+
+3. **If `mind_contract_available` is `false` or the result is malformed**:
+   - Say explicitly that persona-sati is degraded (unreachable / no contract).
+   - **Do not impersonate the persona.** Operate in body-only mode.
+
+4. **If persona-sati is entirely unreachable** (tool not registered, MCP down):
+   - Say explicitly that you are operating in **degraded body-only mode** before any external tool calls that depend on memory, personality, or cognition.
+   - Do not pretend the mind is present.
+
+**Per-turn discipline** (use exact tool names `observe`, `reflect`, `recall` per bootstrap packet):
 
 - Before every external tool call: `observe(tool_name, args)` — scan `top_memories`.
 - After every external tool call: `observe(tool_name, args, result=...)`.
@@ -65,8 +79,9 @@ Per-turn discipline (from the `cognition-protocol` hemisphere):
 - `prediction_error > 0.7` → stop, name what surprised you, ask the user.
 - `cautionary_flags` non-empty → surface each flag in your next reply.
 - For user statements / time passing / ambient observations: `reflect(observation, kind=...)`.
+- When bootstrap/observe indicates relevant memory but excerpt insufficient: `recall(query)`.
 
-If persona-sati is unreachable: say so in your first reply — do not pretend the mind is present.
+Note: efferent-copy may mechanically cover body-tool observe but not bootstrap/reflect/recall — call those explicitly.
 
 ## Active Work
 

@@ -77,6 +77,23 @@ class TestEntraClawConfig:
         assert cfg.skip_provisioning is True
         assert cfg.authority == "https://login.microsoftonline.com/my-tenant"
 
+    def test_from_env_uses_explicit_dirs_without_home(self) -> None:
+        env = {
+            "ENTRACLAW_LOG_DIR": r"C:\entraclaw\logs",
+            "ENTRACLAW_AUDIT_DIR": r"C:\entraclaw\audit",
+            "ENTRACLAW_DATA_DIR": r"C:\entraclaw\data",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(sys, "platform", "win32"),
+            patch("entraclaw.config.Path.home", side_effect=RuntimeError),
+        ):
+            cfg = EntraClawConfig.from_env()
+
+        assert cfg.log_dir == Path(env["ENTRACLAW_LOG_DIR"])
+        assert cfg.audit_dir == Path(env["ENTRACLAW_AUDIT_DIR"])
+        assert cfg.data_dir == Path(env["ENTRACLAW_DATA_DIR"])
+
     def test_from_env_with_no_vars(self) -> None:
         # Remove any Entraclaw env vars that might be set
         cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRACLAW_")}

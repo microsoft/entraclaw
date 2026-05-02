@@ -52,6 +52,11 @@ def _default_dir(subdir: str) -> Path:
     return Path.home() / ".entraclaw" / subdir
 
 
+def _path_from_env(name: str, default_subdir: str) -> Path:
+    value = os.environ.get(name)
+    return Path(value) if value else _default_dir(default_subdir)
+
+
 def _has_content(path: Path) -> bool:
     """True when ``path`` exists and contains at least one entry."""
     return path.is_dir() and any(path.iterdir())
@@ -206,9 +211,9 @@ class EntraClawConfig:
             human_user_types=_parse_csv_preserve_empty(
                 os.environ.get("ENTRACLAW_HUMAN_USER_TYPES")
             ),
-            log_dir=Path(os.environ.get("ENTRACLAW_LOG_DIR", _default_dir("logs"))),
-            audit_dir=Path(os.environ.get("ENTRACLAW_AUDIT_DIR", _default_dir("audit"))),
-            data_dir=Path(os.environ.get("ENTRACLAW_DATA_DIR", _default_dir("data"))),
+            log_dir=_path_from_env("ENTRACLAW_LOG_DIR", "logs"),
+            audit_dir=_path_from_env("ENTRACLAW_AUDIT_DIR", "audit"),
+            data_dir=_path_from_env("ENTRACLAW_DATA_DIR", "data"),
             log_level=os.environ.get("ENTRACLAW_LOG_LEVEL", "INFO"),
             client_id=os.environ.get("ENTRACLAW_CLIENT_ID"),
             skip_provisioning=os.environ.get("ENTRACLAW_SKIP_PROVISIONING", "").lower()

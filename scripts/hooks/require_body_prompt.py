@@ -51,13 +51,21 @@ _GATED_TOOLS = {
 }
 _ENV_OVERRIDE = "ENTRACLAW_SKIP_BODY_PROMPT_GATE"
 _PERSONA_SENTINEL = "mcp__persona-sati__get_system_prompt"
+_BOOTSTRAP_SENTINEL = "mcp__persona-sati__bootstrap_session"
 _BODY_FILE_SUFFIX = "prompts/agent_system.md"
 _ANATOMY_DIR_FRAGMENT = "prompts/anatomy/"
 _MAX_TRANSCRIPT_BYTES = 50 * 1024 * 1024  # 50 MB ceiling — bounds worst-case scan
 
 
 def _transcript_has_body_load(transcript_path: str) -> bool:
-    """Return True iff the transcript contains a body-prompt sentinel tool_use."""
+    """Return True iff the transcript contains a body-prompt sentinel.
+    
+    Acceptable sentinels:
+      1. Read of prompts/agent_system.md or prompts/anatomy/*.md
+      2. mcp__persona-sati__get_system_prompt tool_use
+      3. Successful mcp__persona-sati__bootstrap_session tool result with
+         mind_contract_available: true
+    """
     p = Path(transcript_path)
     if not p.is_file():
         return False
@@ -66,6 +74,9 @@ def _transcript_has_body_load(transcript_path: str) -> bool:
             return False
     except OSError:
         return False
+
+    # Track bootstrap_session tool_use IDs so we can validate their results
+    bootstrap_tool_ids: set[str] = set()
 
     try:
         with p.open("r", encoding="utf-8", errors="replace") as f:
@@ -82,18 +93,44 @@ def _transcript_has_body_load(transcript_path: str) -> bool:
                 content = msg.get("content")
                 if not isinstance(content, list):
                     continue
+                
                 for block in content:
                     if not isinstance(block, dict):
                         continue
-                    if block.get("type") != "tool_use":
-                        continue
-                    name = block.get("name", "")
-                    if name == _PERSONA_SENTINEL:
-                        return True
-                    if name == "Read":
-                        fp = str((block.get("input") or {}).get("file_path", ""))
-                        if fp.endswith(_BODY_FILE_SUFFIX) or _ANATOMY_DIR_FRAGMENT in fp:
+                    
+                    # Check for tool_use sentinels
+                    if block.get("type") == "tool_use":
+                        name = block.get("name", "")
+                        if name == _PERSONA_SENTINEL:
                             return True
+                        if name == _BOOTSTRAP_SENTINEL:
+                            # Remember this tool_use ID to validate its result later
+                            tool_id = block.get("id")
+                            if tool_id:
+                                bootstrap_tool_ids.add(tool_id)
+                        if name == "Read":
+                            fp = str(
+                                (block.get("input") or {}).get("file_path", "")
+                            ).replace("\\", "/")
+                            if fp.endswith(_BODY_FILE_SUFFIX) or _ANATOMY_DIR_FRAGMENT in fp:
+                                return True
+                    
+                    # Check for bootstrap_session tool_result
+                    elif block.get("type") == "tool_result":
+                        tool_use_id = block.get("tool_use_id")
+                        if tool_use_id in bootstrap_tool_ids:
+                            # Parse the result and check mind_contract_available
+                            content_str = block.get("content", "")
+                            if isinstance(content_str, str):
+                                try:
+                                    result = json.loads(content_str)
+                                    if (
+                                        isinstance(result, dict)
+                                        and result.get("mind_contract_available") is True
+                                    ):
+                                        return True
+                                except json.JSONDecodeError:
+                                    pass
     except OSError:
         return False
     return False
@@ -124,8 +161,10 @@ def main() -> int:
         f"To unblock, do ONE of these, then retry the tool:\n"
         f"  - Read prompts/agent_system.md (and the prompts/anatomy/*.md files "
         f"it @includes)\n"
+        f"  - Call mcp__persona-sati__bootstrap_session() (if persona-sati is "
+        f"connected) and receive a result with mind_contract_available: true\n"
         f"  - Call mcp__persona-sati__get_system_prompt() (if persona-sati is "
-        f"connected)\n\n"
+        f"connected, compatibility path)\n\n"
         f"Emergency bypass: set {_ENV_OVERRIDE}=true in the MCP server "
         f"environment. Use only when you've read the body prompt out-of-band "
         f"(e.g. a sub-agent that won't appear in this transcript)."
@@ -133,7 +172,8 @@ def main() -> int:
     print(json.dumps({"decision": "block", "reason": reason}))
     print(
         f"blocked: {tool_name} — body prompt not loaded this session. "
-        f"Read prompts/agent_system.md or call {_PERSONA_SENTINEL} first.",
+        f"Read prompts/agent_system.md, call {_BOOTSTRAP_SENTINEL}, "
+        f"or call {_PERSONA_SENTINEL} first.",
         file=sys.stderr,
     )
     return 2

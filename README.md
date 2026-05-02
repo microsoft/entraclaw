@@ -405,6 +405,20 @@ Auto-discovered from `.mcp.json`. Without the channels flag, the background
 poll still runs — inbound messages append to the interactions log and can
 be retrieved on demand via `read_teams_messages`.
 
+### Host bootstrap for persona-sati
+
+When using EntraClaw with the persona-sati MCP server (the mind-body split):
+
+- **Problem:** Claude Code and Copilot CLI do not reliably inject FastMCP instructions into the LLM system prompt — they only show them in MCP debug UI.
+- **Solution:** Copy `docs/clients/persona-sati-host-bootstrap.md` into your host's global instruction file:
+  - **Claude Code:** `~/.claude/CLAUDE.md`
+  - **Copilot CLI:** Use the configured global Copilot instruction location for your install
+  - **Repo-local fallback:** `CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md` (already present in this repo)
+
+**Minimum behavior:** Call `bootstrap_session()` before first substantive answer or external tool. If `mind_contract_available` is false, do not impersonate persona — operate in body-only mode. Fallback to older tools (`get_system_prompt()`, `context()`, `list_memory_files()`) if `bootstrap_session()` unavailable.
+
+Per-turn cognition uses exact tool names: `observe`, `reflect`, `recall`. See the bootstrap doc for full protocol.
+
 ---
 
 ## MCP Tool Surface (API)

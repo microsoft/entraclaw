@@ -73,3 +73,17 @@ scripts/          # setup.sh, teardown.sh, Entra provisioning
 - Read `docs/runbooks/hard-won-learnings.md` (27 entries) before making auth/Teams changes
 - ADRs in `docs/decisions/` for all significant architectural choices
 - **Sponsor DM wait pattern (mandatory).** When the human says "ping me when X is done" / "I'm going AFK, let me know" / any equivalent: confirm in Teams with `send_teams_message`, do the work, send the completion update with `send_teams_message`, then call `wait_for_sponsor_dm` — that tool blocks this MCP session until the human's DM arrives and returns the message as next-turn input. NEVER poll in a loop. NEVER spawn `copilot -p` / headless subprocesses. NEVER use `watch_teams_replies` for this pattern. Only `wait_for_sponsor_dm`. Sponsor gating is mechanical; Ctrl+C cancels cleanly. Full protocol: `prompts/anatomy/channel-discipline.md`.
+
+## Persona-Sati Bootstrap
+
+When persona-sati MCP server is available, call `bootstrap_session()` before first substantive answer or external tool call. FastMCP instructions are not enough — Claude Code and Copilot CLI do not reliably inject FastMCP instructions into the LLM system prompt; they only surface them in MCP debug UI. The bootstrap protocol must reach you via tool results.
+
+**Decision tree:**
+1. If `bootstrap_session()` succeeds and `mind_contract_available` is true, proceed with returned mind contract, cognition protocol, context, and memory catalog.
+2. If `bootstrap_session()` unavailable but older tools exist, fall back to `get_system_prompt()`, `context()`, `list_memory_files()`.
+3. If `mind_contract_available` is false, say persona-sati is degraded and do not impersonate persona.
+4. If persona-sati entirely unreachable, say body-only mode.
+
+**Per-turn cognition:** Use exact tool names `observe(tool_name, args)` before/after external tools, `reflect(observation, kind=...)` for user feedback/durable context, `recall(query)` when bootstrap/observe indicates relevant memory but excerpt insufficient. Efferent-copy may mechanically cover body-tool observe but not bootstrap/reflect/recall.
+
+See `docs/clients/persona-sati-host-bootstrap.md` for full protocol.

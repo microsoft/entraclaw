@@ -27,6 +27,24 @@ DOCTRINE_FILES = [
     "prompts/anatomy/channel-discipline.md",
 ]
 
+BOOTSTRAP_DOCTRINE_FILES = [
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".github/copilot-instructions.md",
+    "docs/clients/persona-sati-host-bootstrap.md",
+    "README.md",
+    "scripts/setup.sh",
+]
+
+BOOTSTRAP_MARKERS = [
+    "bootstrap_session",
+    "reflect",
+    "recall",
+    "observe",
+    "FastMCP instructions",
+    "mind_contract_available",
+]
+
 
 @pytest.mark.parametrize("relpath", DOCTRINE_FILES)
 def test_doctrine_file_mentions_wait_for_sponsor_dm(relpath: str) -> None:
@@ -91,4 +109,27 @@ def test_send_teams_message_docstring_directs_to_wait_for_sponsor_dm() -> None:
     assert "sponsor" in docstring_lower, (
         "send_teams_message docstring must mention the sponsor trigger so "
         "the model only waits when a reply is actually expected."
+    )
+
+
+@pytest.mark.parametrize("relpath", BOOTSTRAP_DOCTRINE_FILES)
+def test_host_bootstrap_doctrine_mentions_required_mind_protocol(relpath: str) -> None:
+    """Persona-sati bootstrap protocol must reach host LLMs that ignore FastMCP instructions=.
+    
+    Claude Code and Copilot CLI do not inject MCP server `instructions` into
+    the LLM system prompt — they only surface them in MCP debug UI. The
+    bootstrap_session first-call rule, fallback tools (get_system_prompt,
+    context, list_memory_files), observe/reflect/recall per-turn discipline,
+    and mind_contract_available degraded-mode handling must be present in
+    host instruction files and docs that are reliably injected into the model.
+    """
+    path = REPO_ROOT / relpath
+    assert path.exists(), f"Bootstrap doctrine file missing: {relpath}"
+    text = path.read_text(encoding="utf-8")
+    
+    missing = [marker for marker in BOOTSTRAP_MARKERS if marker not in text]
+    assert not missing, (
+        f"{relpath} must reference all persona-sati bootstrap markers so the "
+        f"protocol reaches the LLM despite FastMCP instructions= being dropped. "
+        f"Missing: {missing}. Required: {BOOTSTRAP_MARKERS}"
     )

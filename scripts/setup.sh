@@ -1069,6 +1069,18 @@ echo -e "  3. Restart Claude Code / Copilot CLI in this project — the MCP serv
 echo -e "     will be auto-discovered from ${BLUE}.mcp.json${NC}"
 echo ""
 
+echo -e "  ${YELLOW}Persona-sati host bootstrap:${NC}"
+echo -e "  If this host uses persona-sati, copy ${BLUE}docs/clients/persona-sati-host-bootstrap.md${NC}"
+echo -e "  into host global instruction file. FastMCP instructions are not enough — hosts"
+echo -e "  do not inject them into the LLM system prompt."
+echo -e "    - Claude Code: ${BLUE}~/.claude/CLAUDE.md${NC}"
+echo -e "    - Copilot CLI: use configured global Copilot instruction location for this install"
+echo -e "    - Repo-local fallback: ${BLUE}CLAUDE.md, AGENTS.md, .github/copilot-instructions.md${NC}"
+echo -e "  Required first call in new sessions: ${BLUE}bootstrap_session()${NC}"
+echo -e "  Per-turn cognition uses: ${BLUE}observe, reflect, recall${NC}"
+echo -e "  If ${BLUE}mind_contract_available=false${NC}: body-only mode; do not impersonate persona."
+echo ""
+
 if [ "$MIGRATION_FAILED" = true ]; then
     echo -e "  ${RED}Re-run ${BLUE}./scripts/setup.sh${RED} after fixing the migration error above.${NC}"
     echo ""

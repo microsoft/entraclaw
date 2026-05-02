@@ -103,15 +103,23 @@ auto-injects the session-start trio results into a system message.
 
 ### Recommendation
 
-Combine **A** and **B**:
+**UPDATED:** With persona-sati Phase 2 shipped, combine **A** and **B** targeting
+`bootstrap_session()` as the primary entry point:
 
-1. Author a canonical snippet in `docs/clients/persona-sati-protocol.md`
-   that contains exactly the session-start trio + per-turn rules in a
-   form ready to paste into any host's global instruction file.
+1. Author a canonical snippet in `docs/clients/persona-sati-host-bootstrap.md`
+   that contains exactly the session-start bootstrap + per-turn rules in a
+   form ready to paste into any host's global instruction file. **bootstrap_session()**
+   is now the first-call entry point; the old three-call sequence
+   (`get_system_prompt()`, `context()`, `list_memory_files()`) is a compatibility
+   fallback for persona-sati v1.x without bootstrap_session.
 2. Update README + setup.sh to remind the operator to copy that snippet
    into their host's global config during install.
 3. Brandon's own machine: drop it into `~/.claude/CLAUDE.md` and the
    Copilot CLI equivalent ASAP — one-time fix.
+4. Update CLAUDE.md, AGENTS.md, .github/copilot-instructions.md to mention
+   bootstrap_session and all required markers (bootstrap_session, reflect,
+   recall, observe, FastMCP instructions, mind_contract_available) so
+   tests pin the doctrine.
 
 ## Acceptance criteria
 

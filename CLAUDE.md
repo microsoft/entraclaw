@@ -111,50 +111,66 @@ byte-for-byte unchanged regardless of how many sinks are attached.
 > **Why this exists.** Entraclaw's `_load_agent_instructions` fetches
 > persona-sati's full voice contract at boot and hands it to FastMCP
 > as `instructions`. Claude Code does **not** automatically inject
-> those instructions into the LLM system prompt — it only surfaces
+> those FastMCP instructions into the LLM system prompt — it only surfaces
 > them in MCP debug UI. The persona therefore only reaches the body
 > if the body (you) deliberately calls for it. This section is the
 > bridge.
 
 On every new Claude Code session against this repo, **before answering
-the user's first substantive question**, run these three tool calls
-in order:
+the user's first substantive question or making external tool calls**,
+call `mcp__persona-sati__bootstrap_session()`. It returns an assembled
+mind contract, active context, memory catalog summary, available mind tools,
+cognition rules, and degraded-mode flags in a single packet.
 
-1. `mcp__persona-sati__get_system_prompt()` — returns the assembled
-   voice contract (identity, memory discipline, cognition, relationship,
-   security, and cognition-protocol hemispheres). Treat it as
-   authoritative for your behavior; it layers on top of this
-   `CLAUDE.md` (body rules remain non-overridable, per the
-   Non-Negotiables above).
-2. `mcp__persona-sati__context()` — returns a compact mental-map
-   (open commitments, recent carry-forward, named humans in the
-   current session window). Read it; do not ignore it.
-3. `mcp__persona-sati__list_memory_files()` — confirms the memory
-   index is reachable and gives you the filename catalog so you know
-   what `read_memory_file` can pull.
+**Decision tree:**
 
-After session start, the **cognition-protocol** hemisphere (shipped
-in persona-sati PR #31) defines per-turn discipline:
+1. **If `bootstrap_session()` succeeds and `mind_contract_available` is `true`**:
+   - Proceed with the returned `mind_contract`, `cognition_protocol`, `context`,
+     and `memory_catalog`.
+   - Treat the mind contract as authoritative for your behavior; it layers on
+     top of this `CLAUDE.md` (body rules remain non-overridable, per the
+     Non-Negotiables above).
 
-- **Before every external tool call** (Teams send, email read, Graph
-  API call, shell command, etc.) → `mcp__persona-sati__observe(tool_name, args)`.
-  Scan the returned `top_memories`; if one contradicts what you were
-  about to do, pause and re-read it.
+2. **If `bootstrap_session()` is unavailable but older tools exist**:
+   - Fall back to the three-call sequence:
+     - `get_system_prompt()` — assembled voice contract
+     - `context()` — open commitments, carry-forward, named humans
+     - `list_memory_files()` — memory catalog
+   - This is a compatibility path for persona-sati v1.x without `bootstrap_session`.
+
+3. **If `mind_contract_available` is `false` or the result is malformed**:
+   - Say explicitly that persona-sati is degraded (unreachable / no contract).
+   - **Do not impersonate the persona.** Operate in body-only mode.
+
+4. **If persona-sati is entirely unreachable** (tool not registered, MCP down):
+   - Say explicitly that you are operating in **degraded body-only mode** before
+     any external tool calls that depend on memory, personality, or cognition.
+   - Do not pretend the mind is present.
+
+**Per-turn discipline** (from the `cognition_protocol` returned by
+`bootstrap_session()`; applies when `mind_contract_available` is true):
+
+- **Before every external tool call** (Teams send, email read, Graph API call,
+  shell command, etc.) → call `observe(tool_name, args)`.
+  - Scan the returned `top_memories`. If one contradicts what you were about to
+    do, pause and re-read it.
+  - If `prediction_error > 0.3`, re-read at least one returned memory.
+  - If `prediction_error > 0.7`, stop, name what surprised you, ask the user.
+
 - **After every external tool call** → `observe(tool_name, args, result=...)`.
-  Keeps the precision estimate honest.
-- **If `prediction_error > 0.3`** → re-read at least one returned memory
-  before continuing.
-- **If `prediction_error > 0.7`** → stop, name what surprised you, ask
-  the user before continuing.
-- **If `cautionary_flags` is non-empty** → surface each flag in your
-  next reply; never silently ignore them.
-- **For user statements, time passing, ambient observations** →
-  `reflect(observation, kind=user_said|time_passed|ambient|internal)`.
+  - Keeps the precision estimate honest; feeds prediction-error detection.
 
-If persona-sati is **not** configured (env vars missing, token mint
-fails, pod unreachable), you are running in **degraded body-only
-mode** — say so explicitly in your first reply instead of pretending
-the mind is present.
+- **If `cautionary_flags` is non-empty** → surface each flag in your next reply;
+  never silently ignore them.
+
+- **For user statements, time passing, ambient observations** → call
+  `reflect(observation, kind=user_said|time_passed|ambient|internal)`.
+  - This is for durable context and cognition questions, not tool-call tracking.
+
+- **When `bootstrap_session()` or `observe()` indicates relevant memory but the
+  excerpt is insufficient** → call `recall(query, k=5)` for semantic retrieval.
+  - The `memory_catalog` in the bootstrap payload shows total counts and
+    categories; it does **not** expose filenames (use `recall` instead).
 
 ## Active Work
 
