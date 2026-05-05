@@ -49,6 +49,34 @@ paths.
 **Cross-reference.** See `scripts/hooks/README.md` "Known coverage
 gaps" for the gate-by-gate registry, including this gap.
 
+### Persona-sati 12h MCP refresh bug — PR #47 paused at architectural constraint
+
+**Status:** Open. Draft PR `brandwe/persona-sati#47` (branch `feature/entra-delegated-oauth`). Worktree preserved at `/Volumes/Development HD/persona-sati/.worktrees/entra-oauth`.
+
+**Impact:** Every ~12 hours, Claude Code's cached MCP bearer expires and persona-sati tools start returning Zod schema errors until the user restarts the MCP session. Affects every entraclaw session that connects to persona-sati after the 12h boundary.
+
+**What's implemented in PR #47 (550/550 tests pass, ruff clean):**
+
+- `OAuthConfig` dataclass with env-var plumbing (`PERSONA_SATI_AUTH_SCOPE`).
+- Entra OIDC discovery shim at `/.well-known/oauth-authorization-server-entra` injecting MCP-spec-required fields Entra v2.0 omits (`code_challenge_methods_supported`, `grant_types_supported`).
+- PRM advertises the shim as `authorization_servers` when delegation is configured; legacy fallback when not.
+- Persona-sati's own AS metadata is now MCP-schema-compliant with safe stubs pointing at the `/authorize` tombstone.
+- `provision_identity.py` updated to declare future fresh-tenant scopes as `User`-consentable.
+
+**What's blocked:** the live OAuth flow at the 12h boundary. Microsoft's **Agent Blueprint** app type — which the Persona-Sati Blueprint (`55555555-5555-5555-5555-555555555555`) uses — cannot have public-client redirect URIs and cannot be flipped to fallback-public-client mode. So the Blueprint cannot be the `client_id` in a browser-based PKCE auth-code flow against Entra. Without the OAuth client role, Claude Code's MCP client passes Zod validation but then fails at `/authorize` with `AADSTS70001: Application not found`. **User-visible behavior at 12h is unchanged** (just a different error string).
+
+**Live tenant state:** REVERTED to original by `az rest --method PATCH` after testing the constraint. werner.ac's `access` scope is back to `type: Admin`, redirect URI lists empty. No behavioral change for any existing flow (cert-based three-hop, headersHelper, OBO).
+
+**Possible resolutions:**
+
+1. **Phase 2A — separate "Persona-Sati MCP Client" Entra app reg** (public-client type, not Agent Blueprint). Plumbed through persona-sati's DCR shim (`/register`) so dynamic-client-registration from Claude Code resolves to a real Entra app reg. Estimated 2–3 commits + one `az ad app create` Brandon runs.
+2. **Phase 2B — persona-sati implements OAuth 2.1 endpoints itself** (real `/authorize` + `/token` + PKCE state management), brokering to Entra on the backend via the existing FIC three-hop. Larger surgery; buys independence from Entra's DCR limitation.
+3. **Land PR #47 as Phase 1 only** — discovery surface improvements without the OAuth client app. Honest about scope; doesn't actually close the user-visible 12h bug. File Phase 2A as a follow-up.
+
+Decision pending.
+
+**Why this wasn't caught in design:** the Agent Blueprint constraint (post-GA May 1, 2026) was not in `docs/platform-learnings/msal-entra-agent-ids.md` (last updated 2025-07-14) at the time of PR design. Planning missed it; the Codex consult that informed the design was reasoning from RFC 8414 + MCP spec, not from Microsoft Agent Identity post-GA semantics. Filed: deep-spike on Agent ID / Blueprint / User post-GA semantics + cross-repo platform-learnings sync (entraclaw + persona-sati + agent-foundry-poc) is happening 2026-05-05; the new doc will be `docs/platform-learnings/agent-id-blueprints-and-users.md`.
+
 ### Agent Identity missing `Application.Read.All` after provisioning
 
 **Status:** Open (workaround applied manually on Windows VM).
