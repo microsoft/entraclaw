@@ -159,6 +159,38 @@ class MissingPermissionError(FilesError):
         )
 
 
+class MissingPlaceholderError(EntraClawError):
+    """A substantive Teams message was about to send without a recent placeholder.
+
+    Channel-discipline rule (prompts/anatomy/channel-discipline.md): on
+    substantive Teams DMs, post_thinking_placeholder must be the FIRST
+    action — humans should see "thinking…" within seconds of pinging
+    the agent, not silence followed by a wall of text.
+    """
+
+    def __init__(
+        self,
+        chat_id: str,
+        placeholder_age_seconds: float,
+        grace_seconds: int,
+    ) -> None:
+        self.chat_id = chat_id
+        self.placeholder_age_seconds = placeholder_age_seconds
+        self.grace_seconds = grace_seconds
+        if placeholder_age_seconds == float("inf"):
+            age_str = "never (no placeholder for this chat in this session)"
+        else:
+            age_str = f"{placeholder_age_seconds:.0f}s ago"
+        super().__init__(
+            f"Refusing to send substantive message to {chat_id!r}: "
+            f"last placeholder was {age_str}, exceeds grace window "
+            f"({grace_seconds}s). Call post_thinking_placeholder first, "
+            f"then send. Bypass for non-substantive use cases: set "
+            f"ENTRACLAW_SKIP_PLACEHOLDER_CHECK=true. Disable per-call: "
+            f"keep messages ≤200 chars and ≤2 terminal punctuation marks."
+        )
+
+
 class UnsupportedReadFormatError(FilesError):
     """``read_file`` was called on a file extension it does not support."""
 

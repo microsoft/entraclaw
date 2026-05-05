@@ -14,6 +14,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -26,7 +28,7 @@ from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 from entraclaw import efferent_copy
 from entraclaw.config import get_config
-from entraclaw.errors import EntraClawError, TokenExchangeError
+from entraclaw.errors import EntraClawError, MissingPlaceholderError, TokenExchangeError
 from entraclaw.identity.state_machine import IdentityStateMachine
 from entraclaw.logging_config import setup_logging
 from entraclaw.models import IdentityState
@@ -281,14 +283,161 @@ def _capture_host_from_context() -> str:
 
 
 # Module-level state populated by _initialize().
-_state: dict[str, object] = {"cached_host": ""}
+_state: dict[str, object] = {"cached_host": "", "recent_placeholders": {}}
 _identity: IdentityStateMachine | None = None
+
+# Commitment-language patterns for the outbound-discipline hook in
+# ``send_teams_message``. When the agent's outbound text matches one
+# of these and no recent ``add_promise`` is found, the wrapper appends
+# a ``_discipline_warning`` to the result JSON (warn-not-block; false
+# positives on language detection are real). See
+# ``scripts/hooks/README.md`` for the full registry.
+_COMMITMENT_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"\bI(?:'ll| will| am going to| am gonna)\b", re.IGNORECASE),
+    re.compile(r"\bat the next (?:pause|natural pause|break)\b", re.IGNORECASE),
+    re.compile(r"\bI(?:'ll| will) (?:report back|follow up|circle back)\b", re.IGNORECASE),
+    re.compile(r"\bdrafting (?:and|\+) writing\b", re.IGNORECASE),
+    re.compile(r"\bbatch (?:a |an |the )?\w+ (?:update|write|memory)\b", re.IGNORECASE),
+    re.compile(r"\bcoming (?:back|to this) later\b", re.IGNORECASE),
+    re.compile(r"\bin a follow[- ]up\b", re.IGNORECASE),
+]
+
+# Window (seconds) we look back for an `add_promise` matching the chat_id
+# (or the "terminal" channel for CLI-side commitments). Short — the
+# heuristic is: a commitment phrase the model just emitted should be
+# paired with an add_promise call in the same turn or the immediately
+# preceding one. 120s covers normal tool-call latency.
+_COMMITMENT_PROMISE_LOOKBACK_SECONDS = 120
 
 TOKEN_REFRESH_THRESHOLD = 3300  # 55 min (5-min buffer on 60-min expiry)
 
 # Sent-message tracking for delegated-mode echo prevention
 SENT_MESSAGE_MAX = 1000
 _sent_message_ids: set[str] = set()
+
+
+# ---------------------------------------------------------------------------
+# Outbound-discipline hooks (placeholder + commitment-language)
+#
+# Both hooks fire inside ``send_teams_message`` and are server-side by
+# design — they live in the MCP tool wrapper, not in
+# ``.claude/settings.json``, so they apply on every host that speaks MCP
+# (Claude Code, Copilot CLI, Codex, Cursor) and every storage backend
+# (Local/Blob). See ``scripts/hooks/README.md`` for the registry.
+# ---------------------------------------------------------------------------
+
+
+def _is_substantive_message(message: str) -> bool:
+    """Heuristic for "substantive" Teams text.
+
+    Mirrors the channel-discipline rule (>2 sentences) with two cheap
+    proxies: length > 200 chars, OR more than 2 terminal punctuation
+    marks. Either trips the placeholder-discipline gate.
+    """
+    if not message:
+        return False
+    if len(message) > 200:
+        return True
+    punctuation_count = message.count(".") + message.count("?") + message.count("!")
+    return punctuation_count > 2
+
+
+def _matches_commitment_language(message: str) -> bool:
+    """Return True when the outbound text contains a commitment phrase."""
+    if not message:
+        return False
+    return any(p.search(message) for p in _COMMITMENT_PATTERNS)
+
+
+def _check_placeholder_discipline(message: str, chat_id: str) -> None:
+    """Raise MissingPlaceholderError when sending a substantive message
+    without a recent placeholder for ``chat_id``.
+
+    No-op when:
+    - message is short (≤ 200 chars and ≤ 2 terminal punctuation marks),
+    - ``ENTRACLAW_SKIP_PLACEHOLDER_CHECK=true``,
+    - a placeholder for this chat was posted within the grace window
+      (``ENTRACLAW_PLACEHOLDER_GRACE_SECONDS``, default 300).
+    """
+    if os.environ.get("ENTRACLAW_SKIP_PLACEHOLDER_CHECK", "").lower() in (
+        "true",
+        "1",
+        "yes",
+    ):
+        return
+    if not _is_substantive_message(message):
+        return
+
+    try:
+        grace = int(os.environ.get("ENTRACLAW_PLACEHOLDER_GRACE_SECONDS", "300"))
+    except ValueError:
+        grace = 300
+
+    recent: dict[str, float] = _state.get("recent_placeholders") or {}  # type: ignore[assignment]
+    last_at = recent.get(chat_id)
+    age = float("inf") if last_at is None else time.monotonic() - last_at
+
+    if age > grace:
+        raise MissingPlaceholderError(
+            chat_id=chat_id,
+            placeholder_age_seconds=age,
+            grace_seconds=grace,
+        )
+
+
+async def _has_recent_promise(chat_id: str) -> bool:
+    """Return True if an open promise was created in the last ~120s for
+    this chat_id (or for chat_id="terminal").
+
+    Uses the existing ``list_promises`` implementation in
+    ``entraclaw.tools.promises`` so the lookup goes through whichever
+    storage backend the operator configured (Local/Blob/etc.). Failures
+    are swallowed — the commitment hook is advisory and must not break
+    Teams sends.
+    """
+    try:
+        from entraclaw.tools.promises import list_promises as _list_promises
+
+        promises = await _list_promises(open_only=True)
+    except Exception as exc:  # pragma: no cover - defensive
+        if logger:
+            logger.warning("commitment hook: list_promises failed: %s", exc)
+        return False
+
+    cutoff = datetime.now(UTC) - timedelta(seconds=_COMMITMENT_PROMISE_LOOKBACK_SECONDS)
+    for promise in promises:
+        if promise.chat_id not in (chat_id, "terminal"):
+            continue
+        try:
+            created = datetime.fromisoformat(promise.created_at)
+        except (TypeError, ValueError):
+            continue
+        if created >= cutoff:
+            return True
+    return False
+
+
+async def _check_commitment_language(message: str, chat_id: str) -> str | None:
+    """Return a discipline-warning string when commitment language is
+    detected and no recent promise covers it; return ``None`` otherwise.
+
+    Bypass via ``ENTRACLAW_SKIP_COMMITMENT_CHECK=true``.
+    """
+    if os.environ.get("ENTRACLAW_SKIP_COMMITMENT_CHECK", "").lower() in (
+        "true",
+        "1",
+        "yes",
+    ):
+        return None
+    if not _matches_commitment_language(message):
+        return None
+    if await _has_recent_promise(chat_id):
+        return None
+    return (
+        "Commitment language detected ('I'll', 'at the next pause', etc.) "
+        "but no recent add_promise call. If this commits to future work, "
+        "create a promise via add_promise so it survives session end."
+    )
 
 
 async def _resolve_tenant_id(email: str, our_domain: str) -> str | None:
@@ -1646,6 +1795,20 @@ async def send_teams_message(
             }
         )
 
+    # Outbound-discipline hook 1: placeholder check (HARD BLOCK).
+    # Substantive Teams DMs require a recent post_thinking_placeholder
+    # for this chat_id. See scripts/hooks/README.md.
+    try:
+        _check_placeholder_discipline(message, str(target_chat))
+    except MissingPlaceholderError as exc:
+        return json.dumps(
+            {
+                "error": str(exc),
+                "error_type": "MissingPlaceholderError",
+                "remediation": "post_thinking_placeholder + retry",
+            }
+        )
+
     await _ensure_valid_token()
 
     # In delegated mode the message comes from the human's identity,
@@ -1662,6 +1825,16 @@ async def send_teams_message(
         mentions=mentions,
         prefix=prefix,
     )
+
+    # Outbound-discipline hook 2: commitment-language → promise (WARN).
+    # Scans the outbound text for "I'll do X" / "at the next pause"
+    # phrases. If we find one and there's no recent add_promise covering
+    # this chat_id (or chat_id="terminal"), tag the result with
+    # _discipline_warning so the LLM sees it next turn. Does NOT block.
+    if isinstance(result, dict):
+        warning = await _check_commitment_language(message, str(target_chat))
+        if warning is not None:
+            result["_discipline_warning"] = warning
 
     # Log the outbound message for the daily summary.
     _log_interaction_safe(
@@ -1850,6 +2023,15 @@ async def post_thinking_placeholder(
         chat_id=chat_id,
         text=text,
     )
+
+    # Record placeholder timestamp so the placeholder-discipline hook
+    # in ``send_teams_message`` can verify a recent placeholder for
+    # this chat. ``time.monotonic()`` matches ``_state["token_acquired_at"]``
+    # for consistency.
+    recent: dict[str, float] = _state.setdefault(  # type: ignore[assignment]
+        "recent_placeholders", {}
+    )
+    recent[chat_id] = time.monotonic()
 
     _log_interaction_safe(
         channel=detect_channel(chat_id),

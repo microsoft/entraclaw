@@ -8,6 +8,47 @@
 
 ## Known Issues (Open)
 
+### CLI commitment-language detection — unenforced
+
+**Status:** Open by design. Server-side commitment-language detection
+ships today as part of the `send_teams_message` outbound-discipline
+hooks, but only fires on outbound Teams text — the MCP server never
+sees CLI/host-terminal text. Commitments uttered to the operator in
+the host terminal ("I'll batch this up later", "at the next pause")
+do not become durable `add_promise` records and silently drift.
+
+**Why this matters.** Significant design conversation happens in CLI,
+not Teams — meaning many real commitments today are CLI-only.
+`prompts/anatomy/channel-discipline.md` already requires
+`add_promise` on commitment language regardless of channel, but the
+rule drifts because there is no mechanical enforcement on the CLI
+side. The lapse on 2026-05-04 (the lapse that motivated this PR) was
+exactly CLI commitment without `add_promise`.
+
+**Trade-off accepted in this PR.** Server-side enforcement is
+host-portable (works on Claude Code, Copilot CLI, Codex, Cursor, any
+direct MCP client) and storage-portable (works on `LocalBackend` and
+`BlobBackend` alike). CLI enforcement would require harness coupling
+— a `Stop` hook in Claude Code that reads the transcript — which
+breaks portability and only covers one host. We chose host-portable
+coverage of the Teams path over Claude-Code-only coverage of both
+paths.
+
+**Mitigations considered.**
+- **`Stop` hook reading the transcript.** Rejected for now — couples
+  enforcement to one host, and the same gap reopens on every other
+  host that doesn't have an equivalent. Worth revisiting if Claude
+  Code becomes the dominant host long-term.
+- **Body-prompt strengthening.** In flight — adding a TL;DR
+  checklist to `prompts/anatomy/channel-discipline.md` so the
+  commitment-on-CLI rule is more salient at every turn.
+- **Per-host shims.** Deferred. Each host gets its own
+  Stop-equivalent enforcement script. Duplication, but each script
+  is cheap.
+
+**Cross-reference.** See `scripts/hooks/README.md` "Known coverage
+gaps" for the gate-by-gate registry, including this gap.
+
 ### Agent Identity missing `Application.Read.All` after provisioning
 
 **Status:** Open (workaround applied manually on Windows VM).
