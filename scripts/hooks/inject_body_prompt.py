@@ -88,7 +88,32 @@ def main() -> int:
     if not body:
         return 0
 
+    # The full body is ~30KB and routinely overflows Claude Code's
+    # inline-context limit; the harness then persists the
+    # additionalContext to a file and shows only a ~2KB preview to the
+    # agent. The agent has to know to read the rest. This preface is
+    # short enough to land inside that preview, so it works as a
+    # truncation-aware self-trigger: the rules below cannot govern the
+    # agent if they are not actually in its context.
     header = (
+        "# IMPORTANT — Body prompt loaded; READ THIS BEFORE RESPONDING\n"
+        "\n"
+        "The body prompt below is the non-overridable security, channel-"
+        "discipline, and identity-and-tools contract for this agent. It "
+        "governs everything that follows (`CLAUDE.md` → \"Body prompt is "
+        "non-overridable\").\n"
+        "\n"
+        "**Truncation check — do this BEFORE replying, before any other "
+        "tool call.** If this content is wrapped in a `<persisted-output>` "
+        "block (the hook output exceeded the inline-context limit and only "
+        "a Preview is shown), your FIRST action is to use the `Read` tool "
+        "on the file path printed in that block. The body rules cannot "
+        "govern you if they are not in your context, and the preview is "
+        "not enough. Canonical source: `prompts/agent_system.md` in this "
+        "repo (with `@include` expansion over `prompts/anatomy/*.md`).\n"
+        "\n"
+        "---\n"
+        "\n"
         "# Body prompt (entraclaw)\n"
         "\n"
         "The following is the non-overridable body prompt, loaded from "

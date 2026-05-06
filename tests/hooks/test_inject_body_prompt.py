@@ -132,6 +132,47 @@ class TestHookGracefulDegradation:
         assert "ok" in parsed["hookSpecificOutput"]["additionalContext"]
 
 
+class TestHookTruncationDirective:
+    """The body prompt routinely overflows Claude Code's inline-context
+    limit and gets persisted to a file with only a ~2KB preview. The
+    hook must therefore embed a truncation-aware directive that
+    (a) lands inside that preview region and (b) tells the agent to
+    Read the persisted file before responding. Without this, large body
+    prompts silently fail to govern the agent.
+    """
+
+    PREVIEW_BUDGET_BYTES = 2048
+
+    def test_directive_lands_in_preview_region(self, tmp_path: Path) -> None:
+        _write_prompt(tmp_path, body="rule\n", includes={})
+        result = _run_hook(tmp_path)
+        assert result.returncode == 0, result.stderr
+        ctx = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        preview = ctx[: self.PREVIEW_BUDGET_BYTES]
+        # The agent must see a Read-the-file directive even when it only
+        # gets the preview.
+        assert "persisted-output" in preview
+        assert "Read" in preview
+        # Canonical fallback path must be discoverable from the preview
+        # alone, in case the persisted-file path itself is somehow missing.
+        assert "prompts/agent_system.md" in preview
+
+    def test_directive_present_for_large_body(self, tmp_path: Path) -> None:
+        # Simulate the real-world case: body prompt large enough to
+        # overflow the inline cap.
+        large_body = "# body\n\n" + ("filler line padding the body\n" * 1500)
+        _write_prompt(tmp_path, body=large_body, includes={})
+        result = _run_hook(tmp_path)
+        assert result.returncode == 0, result.stderr
+        ctx = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        # Confirm we're actually in the overflow regime this test is
+        # designed for.
+        assert len(ctx) > self.PREVIEW_BUDGET_BYTES * 4
+        preview = ctx[: self.PREVIEW_BUDGET_BYTES]
+        assert "persisted-output" in preview
+        assert "Read" in preview
+
+
 class TestHookAgainstRealRepoPrompt:
     """Smoke test against the actual prompts/agent_system.md in the repo.
 
