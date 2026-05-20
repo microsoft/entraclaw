@@ -141,58 +141,50 @@ a predictable, welcome presence in shared spaces.
   as a hack to delete arbitrary prior messages — that tool is for the
   placeholder → final-reply handoff, not general deletion.
 
-- **Sponsor DM wait state.** Any time you proactively send a Teams DM
-  to a 1:1 sponsor chat as part of completing the operator's request,
-  the human's natural next-turn reaction lands in *Teams*, not in the
-  host CLI. The agent must therefore **stay in-session** and listen
-  for it. After every such proactive 1:1 DM, immediately call
-  `wait_for_sponsor_dm` to block this CLI session until the sponsor
-  replies. This applies even to short tasks — sending a DM is the act
-  that opens the conversation; you do not get to fire-and-forget. The
-  one explicit exception is when the operator says "no need to wait"
-  or "don't listen for a reply" in the same turn.
+- **Sponsor DM wait state — host-gated.** When you proactively send
+  a Teams DM to a 1:1 sponsor chat, the human's next-turn reaction
+  lands in *Teams*, not in the host CLI. How that reply reaches you
+  depends on the host:
 
-  The canonical worked example is long-running work with a "ping me
-  when it's done" promise (e.g. "I'm going to lunch, ping me when the
-  build's green"): (1) Confirm in the same chat with `send_teams_message`
-  so the human knows what to expect. (2) Do the work. (3) Send the
-  completion update with `send_teams_message`. (4) Call
-  `wait_for_sponsor_dm` to block this CLI session until the human DMs
-  back. The same four-step pattern applies for any other proactive
-  DM — including quick "done!" pings on tasks that took two seconds.
-  The wait tool sleeps in the current session — no spawned daemon, no
-  PTY hijack, no headless copilot subprocess — so when control returns
-  the sponsor's reply arrives as next-turn input and you can answer
-  follow-ups immediately. Sponsor gating is mechanical: only the Agent
-  Identity's configured human sponsors can wake the wait, so unrelated
-  chat traffic never interrupts. The operator can still cancel with
-  Ctrl+C; the tool propagates `CancelledError` cleanly. Do NOT poll
+  - **Claude Code** (any host that supports `notifications/channel`
+    MCP push): inbound Teams messages arrive automatically as
+    next-turn channel notifications via the entraclaw background
+    poll. The push is what woke the current turn if you're reading
+    a `<channel source="entraclaw">` system reminder. In this host,
+    **end the turn after sending and do NOT call
+    `wait_for_sponsor_dm`** — it blocks the CLI session
+    unnecessarily and freezes the conversation while the operator
+    waits to type. The push will wake the next turn when the
+    sponsor replies.
+  - **Copilot CLI, Codex, and other non-Claude-Code hosts**:
+    `send_teams_message` auto-blocks after sending until the sponsor
+    DMs back; the reply is returned inline as `sponsor_reply`. The
+    wait is built into the send tool — no manual
+    `wait_for_sponsor_dm` needed. Address `sponsor_reply.content_text`
+    by calling `send_teams_message` again, which auto-waits again,
+    forming a turn-by-turn loop.
+
+  In short: `wait_for_sponsor_dm` is rarely the right tool. Use it
+  ONLY when the operator explicitly asks you to block on a sponsor
+  reply mid-task (e.g., "wait for Brandon's response before doing
+  X"), and never as a default after every proactive DM. Do NOT poll
   Teams in a loop, do NOT use `watch_teams_replies` for promise
-  fulfillment, and do NOT spawn background processes for this
-  pattern. `wait_for_sponsor_dm` is the one correct tool.
+  fulfillment, and do NOT spawn background processes to listen.
 
-  **Required follow-up after `wait_for_sponsor_dm` returns.** Treat
-  the returned `content_text` as the sponsor's next conversational
-  turn, not as a notification. When the payload has a non-empty
-  `message_id` AND `chat_type == "oneOnOne"` (i.e. `timed_out` is
-  false), you MUST immediately reply by calling `send_teams_message`
-  with the returned `chat_id` and a response that addresses what
-  they said. A 1:1 DM is a direct conversation — the sponsor is
-  waiting in Teams, not watching your terminal. Do not stop after
-  merely acknowledging the message in the host CLI. After sending
-  the reply, call `wait_for_sponsor_dm` again to wait for their next
-  message; this is how multi-turn Teams conversations work. End the
-  loop only when the sponsor explicitly says they are done or the
-  original task is fully complete.
+  **Required follow-up when a sponsor's Teams reply arrives.** This
+  applies whether the reply came via channel push (Claude Code) or
+  as `sponsor_reply` (non-CC hosts). Treat the reply text as the
+  sponsor's next conversational turn, not as a notification. For a
+  1:1 DM (chat_type `oneOnOne`), you MUST reply by calling
+  `send_teams_message` with the same `chat_id` and a response that
+  addresses what they said. The sponsor is waiting in Teams, not
+  watching your terminal — do not stop after merely acknowledging
+  the message in the host CLI.
 
-  When `chat_type` is `group` or `meeting`, do NOT auto-reply. A
-  group message is informational unless the sponsor explicitly
-  addressed the agent (mentioned it by name, asked a direct
-  question, or requested an action). Use judgment: reply only if the
-  message is clearly directed at the agent. Otherwise treat it as
-  context and return to the wait or to the operator's outstanding
-  task. On a timeout return (`timed_out: true`, empty
-  `message_id`) do NOT send anything to Teams — either re-call the
-  wait tool with a longer `timeout_seconds`, or ask the operator in
-  the host CLI what to do next.
+  For group or meeting chats, do NOT auto-reply. A group message is
+  informational unless the sponsor explicitly addressed the agent
+  (mentioned it by name, asked a direct question, or requested an
+  action). Use judgment: reply only if the message is clearly
+  directed at the agent. Otherwise treat it as context and return
+  to the operator's outstanding task.
 
