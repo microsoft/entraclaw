@@ -1,5 +1,7 @@
 # Next: Tenant & Identity Setup
 
+> **HISTORICAL — superseded by `scripts/setup.sh` and the current [Quickstart](../getting-started/quickstart.md). Kept for the design checklist.**
+
 > Everything that needs to happen in Entra and M365 before the code works.
 
 ## Checklist

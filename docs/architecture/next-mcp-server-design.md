@@ -1,5 +1,7 @@
 # Next: Entraclaw MCP Server Design
 
+> **HISTORICAL — shipped. The current MCP server implementation lives at `src/entraclaw/mcp_server.py`; see [System Overview](system-overview.md) for the live architecture.**
+
 > The core deliverable — an MCP server that gives Copilot CLI agent identity, Teams communication, and audit.
 
 ## Review Status
