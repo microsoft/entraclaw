@@ -4,6 +4,8 @@ Day-to-day scripts for interacting with the running agent: reading messages, sen
 
 All use the Agent User three-hop token unless noted otherwise.
 
+> **Note for Copilot CLI / Codex / Cursor users.** On hosts that don't support the `notifications/claude/channel` push extension, the MCP server's background poll still runs and accumulates messages in the interaction log, but the LLM doesn't receive them until it actively reads. `catch_up.py` and `dm.py` are the CLI-side companions for that workflow. Claude Code users get inbound messages as channel-push system reminders and rarely need either script. See [System Overview — Message Delivery](../../architecture/system-overview.md#message-delivery-channel-push-vs-polling) for the full breakdown.
+
 ## `catch_up.py`
 
 Pull recent messages from every watched chat and the agent's inbox.
@@ -21,7 +23,7 @@ python scripts/catch_up.py
 - For each chat, fetches the latest messages and prints them.
 - Pulls recent emails from `/me/messages`.
 
-Useful when the background poll has been down and you want to see what was missed.
+Useful when the background poll has been running but the LLM didn't see the messages (non-channel-push host), or when the poll itself has been down and you want to see what was missed.
 
 ## `dm.py`
 

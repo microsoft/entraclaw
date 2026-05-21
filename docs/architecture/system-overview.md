@@ -75,6 +75,21 @@ The Blueprint's underlying app type post-GA cannot be flipped to fallback-public
 
 The agent system prompt lives in `prompts/agent_system.md` plus the `@include`-expanded `prompts/anatomy/*.md` modules. When persona-sati is reachable, its mind contract layers on top of the body — never underneath. See `docs/architecture/DESIGN-persona-sati-integration.md`.
 
+## Message Delivery — Channel Push vs Polling
+
+The MCP server runs four background tasks: Teams chat poll (5s), email poll (60s), chat auto-discovery (120s), and a daily-summary scheduler at 5pm PDT. All four are server-side and always running in `agent_user` mode. What differs between hosts is how those messages reach the LLM.
+
+**Claude Code (channel push).** Claude Code implements the `notifications/claude/channel` extension. When the background poll detects an inbound Teams message or email, the server emits a channel notification and the LLM receives it as a next-turn `<channel source="entraclaw">` system reminder — no tool call, no human prompt. The agent sees DMs the moment they land; the Teams conversation IS the conversation with the agent. Start Claude Code with `--dangerously-load-development-channels server:entraclaw` to enable the extension.
+
+**Copilot CLI / Codex / Cursor / other MCP hosts (polling fallback).** Hosts without the channel-push extension still get the background poll running — messages accumulate in the interaction log (`~/.entraclaw/data/interactions/<day>.jsonl` or the equivalent blob path), but they don't stream into the LLM. The agent reads them on demand:
+
+- `read_teams_messages(chat_id)` — current state of a chat
+- `send_teams_message(...)` — on non-Claude-Code hosts, auto-blocks after sending until the sponsor's reply arrives, then returns it inline as `sponsor_reply`. This is the deterministic, host-detected wait pattern; no parameter the model can disable.
+- `scripts/catch_up.py` — prints every watched chat's recent activity. Useful when a human wants to see what landed while the host wasn't subscribed.
+- `scripts/dm.py "message" --chat <id>` — send-only CLI shortcut for when the agent isn't running.
+
+Channel push is the better UX. The polling fallback is a working second-class path for hosts that haven't shipped the extension. See `docs/platform-learnings/mcp-close-the-loop.md` for the spec analysis and the three problems channel-push solves.
+
 ## Provisioning
 
 Setup is handled by two Python scripts called from `setup.sh`:

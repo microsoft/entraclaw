@@ -74,7 +74,11 @@ flowchart LR
     AgentID -->|user_fic| Blob
 ```
 
-The agent talks to the MCP server over stdio. The server reads the Blueprint's private key from the OS keystore, walks the three-hop chain to produce a delegated user token, and uses that token for every Graph and Work IQ call. Inbound Teams messages and emails arrive via background polls and push into the client as channel notifications. Operational state (interaction log, daily summaries, watched chats) lives locally by default, or in Azure Blob Storage scoped to the Agent User's object ID when cloud memory is enabled.
+The agent talks to the MCP server over stdio. The server reads the Blueprint's private key from the OS keystore, walks the three-hop chain to produce a delegated user token, and uses that token for every Graph and Work IQ call.
+
+**Inbound delivery differs by host.** On **Claude Code**, the server's background poll pushes every inbound Teams message and email directly into the LLM as a `notifications/claude/channel` system reminder — the agent sees a DM the moment it lands, with no tool call and no human prompt required. The conversation in Teams becomes the conversation with the agent. On **Copilot CLI, Codex, Cursor, and any MCP host that doesn't implement the channel-push extension**, the same background poll runs server-side, but messages accumulate in the interaction log instead of streaming in. The agent reads them on demand via `read_teams_messages`, `send_teams_message` auto-blocks for the sponsor's reply when push is unavailable, and `scripts/catch_up.py` prints recent activity from the CLI. Channel push is the better UX; the polling fallback is a working second-class path for hosts that haven't shipped the extension yet.
+
+Operational state (interaction log, daily summaries, watched chats) lives locally by default, or in Azure Blob Storage scoped to the Agent User's object ID when cloud memory is enabled.
 
 Full walkthrough in [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md). The module-by-module breakdown lives in [`docs/architecture/layers/`](docs/architecture/layers).
 
