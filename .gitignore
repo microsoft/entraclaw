@@ -31,6 +31,9 @@ entraclaw_msal_cache
 tests/smoke/logs/
 *.zip
 
+# MkDocs build output (deployed via GitHub Actions, never committed)
+site/
+
 # ADO / Azure Pipelines (kept locally, hidden from GitHub)
 agency.toml
 azurepipelines-coverage.yml
