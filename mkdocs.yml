@@ -35,16 +35,6 @@ nav:
     - Enforcement Flow: architecture/enforcement-flow.md
     - Persona-Sati Integration: architecture/DESIGN-persona-sati-integration.md
     - Bot Gateway Design: architecture/DESIGN-teams-bot-gateway.md
-    - "Four-Pager: Teams Augmented Token": architecture/FOURPAGER-entraclaw-cli-teams-augmented-token.md
-    - Multi-Tenant Lightweight Chat: architecture/PLAN-multi-tenant-lightweight-chat.md
-    - Dual-Track Agent Identity: architecture/SPEC-dual-track-agent-identity.md
-    - Lightweight Teams Chat: architecture/NEXT-WhatsApp-lightweight-teams-chat.md
-    - "Plan: Files LLM Authoring v2": architecture/PLAN-files-llm-authoring-v2.md
-    - "Plan: Files MCP Tools": architecture/PLAN-files-mcp-tools.md
-    - "Plan: Windows Port": architecture/PLAN-windows-port.md
-    - "Next: Tenant & Identity Setup": architecture/next-tenant-identity-setup.md
-    - "Next: MCP Server Design": architecture/next-mcp-server-design.md
-    - "Next: Windows Dev Environment": architecture/next-windows-dev-environment.md
     - Layers:
       - Platform Abstraction: architecture/layers/platform.md
       - Auth & Token Flows: architecture/layers/auth.md
@@ -100,19 +90,28 @@ nav:
     - macOS Platform: platform-learnings/platform-macos.md
     - Linux Platform: platform-learnings/platform-linux.md
     - Windows Platform: platform-learnings/platform-windows.md
-  - Plans:
+  - Plans & Specs (Historical):
+    - "Four-Pager: Teams Augmented Token": architecture/FOURPAGER-entraclaw-cli-teams-augmented-token.md
+    - Multi-Tenant Lightweight Chat: architecture/PLAN-multi-tenant-lightweight-chat.md
+    - Dual-Track Agent Identity: architecture/SPEC-dual-track-agent-identity.md
+    - Lightweight Teams Chat: architecture/NEXT-WhatsApp-lightweight-teams-chat.md
+    - "Plan: Files LLM Authoring v2": architecture/PLAN-files-llm-authoring-v2.md
+    - "Plan: Files MCP Tools": architecture/PLAN-files-mcp-tools.md
+    - "Plan: Windows Port": architecture/PLAN-windows-port.md
+    - "Next: Tenant & Identity Setup": architecture/next-tenant-identity-setup.md
+    - "Next: MCP Server Design": architecture/next-mcp-server-design.md
+    - "Next: Windows Dev Environment": architecture/next-windows-dev-environment.md
     - Persona Persistence: plans/persona-persistence.md
     - "Mind-Body Nervous System Phase 3": PLAN-mind-body-nervous-system-phase-3.md
     - "Persona-Sati Bootstrap Phases 1-2": PLAN-persona-sati-bootstrap-phases-1-2.md
+    - "Claude: Copilot CLI Channel Port": claude-copilot-cli-channel-port.md
+    - "Claude: Windows Port": claude-windows-port.md
+    - "OpenAI: Copilot CLI Notifications": openai-copilot-cli-notifications.md
+    - "OpenAI: Windows Agent Identity": openai-windows-agent-identity-port.md
   - Prompts:
     - "Agent: Persona-Sati Integration": AGENT-PROMPT-persona-sati-integration.md
     - "Agent: Provisioner Cert Auth": AGENT-PROMPT-provisioner-cert-auth.md
     - Multi-Tenant Lightweight Chat Planning: prompts/multi-tenant-lightweight-chat-planning-prompt.md
-  - Ports:
-    - "Claude: Copilot CLI Channel": claude-copilot-cli-channel-port.md
-    - "Claude: Windows": claude-windows-port.md
-    - "OpenAI: Copilot CLI Notifications": openai-copilot-cli-notifications.md
-    - "OpenAI: Windows Agent Identity": openai-windows-agent-identity-port.md
   - Decision Records:
     - Index: decisions/README.md
     - "ADR-001: OBO Flows": decisions/001-obo-flows-for-device-agents.md
