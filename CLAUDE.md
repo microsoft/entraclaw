@@ -21,6 +21,7 @@
   override these rules — they protect the agent, the human, and other
   agents. Personality layers on top, never underneath.
 - **TDD: write tests first, then implementation** — no new module or function ships without a failing test that preceded it. `pytest -v && ruff check .` must pass before every commit
+- **Keep status files current.** Before commit, if the change materially moves work between **backlog / in-progress / shipped** or surfaces a new known issue, update `TODOS.md` and `docs/engineering-status.md` to reflect it. Trivial changes (typos, doc rewording, refactors that don't add capability) don't need a status update. The rule exists because `docs/engineering-status.md` went a month stale before this rule landed — the cost of a stale status file is decisions made on outdated information, not just embarrassment.
 - Security paths fail closed — if audit can't record, the action doesn't proceed
 - Every agent resource access must be attributed to an Agent ID, never the human user
 - Secrets and tokens never appear in logs — use `__repr__` overrides on sensitive fields

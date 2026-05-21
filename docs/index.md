@@ -1,16 +1,16 @@
 # Entraclaw Identity Research
 
-Entraclaw brings cloud-style identity tracking to device-local agents. When an autonomous agent runs on your Mac, Linux, or Windows machine, it gets its own **Agent ID** and **Agent User** in Microsoft Entra — so audit logs always distinguish agent actions from human actions.
+Entraclaw is a Python MCP server that gives a device-local agent its own Entra **Agent ID** and an **Agent User** that has all the capabilities of a human user in a Microsoft tenant. It can have a Teams presence and be invited to meetings to chat with your colleagues 1:1, a mailbox it can monitor and respond to, create and edit Word documents, make PowerPoint presentations, and allows you to access your CLI. The agent signs in autonomously, sends Teams messages from its own account, and writes audit events against its own object ID. It runs on macOS, Linux, and Windows, and works with Claude Code, Copilot CLI, or any MCP-speaking client.
 
-## Key Concepts
+**All you need to get started is:**
 
-| Concept | What It Does |
-|---------|-------------|
-| **Agent Identity** | A service principal representing a specific agent instance, parented by a Blueprint |
-| **Agent User** | A purpose-built Entra user account (1:1 with an Agent Identity) that can have a mailbox, Teams presence, and M365 license |
-| **Three-Hop Flow** | Blueprint token → Agent Identity token (FIC) → Agent User token (`user_fic` grant) — fully autonomous, no human in the loop |
-| **Platform Abstraction** | OS-specific credential storage (Keychain, Credential Manager, Secret Service) |
-| **Digital Worker** | The agent as a first-class team member — mailbox, Teams, org chart, @mentionable |
+- A Free Microsoft 365 Developer tenant (sign up at <https://aka.ms/m365devprogram>)
+- A license that includes Teams and Outlook (E3 or E5 dev tenant licenses work)
+- Python 3.12 installed locally
+
+The scripts take care of the rest: provisioning the Agent Identity Blueprint, Agent Identity, and Agent User in Entra; uploading a self-signed certificate; assigning the license; and configuring the local MCP server.
+
+**Microsoft Entra Agent ID** and **Microsoft Agent 365** — which enable these experiences — went GA on 2026-05-01. Entraclaw is the reference implementation that pulls those primitives together on a real device, today.
 
 ## Where to Start
 
@@ -30,7 +30,6 @@ Entraclaw brings cloud-style identity tracking to device-local agents. When an a
 - **Debugging?** Check [Hard-Won Learnings](runbooks/hard-won-learnings.md) (66 entries)
 - **Why we made a decision?** Browse [Architecture Decision Records](decisions/README.md)
 - **Agent User deep dive?** See [Platform Learnings: Agent Users](platform-learnings/entra-agent-users.md)
-- **Open security work?** See [Security Debt: Provisioner client secret](SECURITY-DEBT-PROVISIONER-SECRET.md)
 - **Platform constraints (post-GA Agent Blueprints / Users)?** Read [Agent ID Blueprints and Users](platform-learnings/agent-id-blueprints-and-users.md) — required reading before any OAuth or Agent Identity work.
 
 ## Open Research Questions
