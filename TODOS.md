@@ -34,11 +34,14 @@ Land the next phase of cloud-hosted memory. Spec: `docs/decisions/005-cloud-host
 - **Depends on:** Phase 1 (`f900ba1`, shipped)
 - **Source:** ADR-005
 
-### Test isolation: interaction_log tests leak into production blob when ENTRACLAW_BLOB_ENDPOINT is set
-The `tmp_data_dir` fixture in `tests/tools/test_interaction_log.py` sets `ENTRACLAW_DATA_DIR` to a pytest tmp path but does NOT clear `ENTRACLAW_BLOB_ENDPOINT` / `ENTRACLAW_BLOB_CONTAINER`. Since Phase 2/5 routed `log_interaction` and `read_day` through `get_backend()`, the factory reads those env vars and returns `BlobBackend` — which hits the real production container and ignores the tmp_data_dir. Result: 10 tests in `test_interaction_log.py` fail on any machine with the blob env configured (passed on the Phase 6a author's machine because they hadn't exported those vars). Observed 2026-04-17 during Phase 6a review: test run produced 443 passed / 10 failed; failing tests were reading 75 real chat entries from blob when they expected 2 from the tmp dir.
-Fix: make the `tmp_data_dir` fixture (and any sibling fixture that patches config) also `monkeypatch.delenv("ENTRACLAW_BLOB_ENDPOINT", raising=False)` + same for `ENTRACLAW_BLOB_CONTAINER`. Consider a session-scoped autouse fixture that unsets blob env for *all* tests unless a test opts in. Also audit other test files that might have the same latent bug (`test_daily_summary.py`, `test_email_poll.py`, anywhere using `get_backend()`).
-- **Effort:** S (~30 LOC — fixture edit + audit)
-- **Source:** Phase 6a review 2026-04-17; failure is pre-existing on main, not introduced by Phase 6a
+### ~~Test isolation: interaction_log tests leak into production blob when ENTRACLAW_BLOB_ENDPOINT is set~~ ✅ DONE
+Fixed 2026-05-21 with a global pytest autouse fixture in `tests/conftest.py`
+that clears `ENTRACLAW_BLOB_ENDPOINT`, `ENTRACLAW_BLOB_CONTAINER`, and
+`ENTRACLAW_KEEP_MEMORY_LOCAL` before each test. Tests that intentionally
+exercise blob behavior still opt in by setting those env vars inside the test.
+The original interaction-log fixture had already been patched; the remaining
+repro was in MCP server integration tests that set only `ENTRACLAW_DATA_DIR`.
+- **Source:** Phase 6a review 2026-04-17; fixed on `fix/test-blob-env-isolation`
 
 ### PersonaBackend.pull_all() missing mtime-newer-local check (Phase 6d scope)
 `src/entraclaw/storage/persona.py` `pull_all()` currently overwrites local files unconditionally — cloud is authoritative on pull. The persona-persistence plan §4.2 specified: "If local is newer (happens if session was offline), leave it (to be pushed next)." Phase 6a shipped without that check for the safe-starting-point framing, but it's a race-loss risk: if a session writes a memory file offline, the next online session's SessionStart pull will clobber it before the PostToolUse-Write push fires. The mitigation of this was planned for Phase 6d (ETag-based conflict resolution) but the simple mtime check should land sooner.

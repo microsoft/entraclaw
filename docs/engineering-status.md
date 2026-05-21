@@ -10,7 +10,6 @@
 Source of truth for detail: `TODOS.md` in the repository root. One line each below.
 
 - **Script-toolkit docs closeout** — `./status.sh` is the canonical entry; finish the remaining script-reference polish and smoke verification. See `TODOS.md` P1.
-- **Test isolation: blob env leakage** — `tmp_data_dir` fixture in `tests/tools/test_interaction_log.py` doesn't clear `ENTRACLAW_BLOB_ENDPOINT`; 10 tests fail on any machine with blob env configured.
 - **MCP server orphans on Claude Code exit** — background poll tasks sit outside FastMCP's lifespan cancel scope; new sessions spawn a second server, both poll Graph independently.
 - **Daily summary scheduler — wrong day + double-fire** — UTC-based `target_day` summarizes the brand-new UTC day at 5pm PDT; scheduler fired twice at the same second on 2026-04-17.
 - **Email cursor sub-second precision** — cursor file at second precision; an email at the cursor's exact second gets re-pushed once on every server restart.
@@ -20,6 +19,7 @@ Source of truth for detail: `TODOS.md` in the repository root. One line each bel
 Last ~30 days. Full diff: `git log --since="2026-04-21"`.
 
 - **README + docs-site refresh** (2026-05-21, ff9a8dd, 9b73dee, b495073) — developer-first README rewrite, GitHub Pages auto-deploy, nav restructure.
+- **Test isolation for blob env leakage** (2026-05-21) — pytest now clears blob storage env by default so local-storage tests cannot hit the real production blob container unless they opt in.
 - **OSS sanitization passes** (2026-05-21, f2a3c18; 2026-05-18, 6cff243) — PII scrub, personal data and private identifiers removed from repo.
 - **Script toolkit refactor + E2E smoke harness** (2026-05-19, PR #77) — `./status.sh` consolidated; `setup.sh --status` delegates to the same implementation.
 - **Sponsor DM wait — host-gated fix** (2026-05-19, 905b7d0, 26aa647) — `wait_for_sponsor_dm` no longer blocks Claude Code sessions; channel push is the path on hosts that support it. Learning #66.

@@ -8,6 +8,14 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _isolate_storage_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default tests to local storage unless they opt into blob env explicitly."""
+    monkeypatch.delenv("ENTRACLAW_BLOB_ENDPOINT", raising=False)
+    monkeypatch.delenv("ENTRACLAW_BLOB_CONTAINER", raising=False)
+    monkeypatch.delenv("ENTRACLAW_KEEP_MEMORY_LOCAL", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _attach_caplog_to_entraclaw(caplog: pytest.LogCaptureFixture) -> None:
     """Let pytest's caplog capture records from the entraclaw logger.
 
