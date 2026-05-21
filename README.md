@@ -1,12 +1,17 @@
-# entraclaw
+# Entraclaw: Identity Research for Microsoft 365 Agents
 
-> Agents need their own identity, not borrowed ones.
 
-When an autonomous agent does work on your behalf today, the audit log shows your name. Conditional Access enforces your account. DLP applies to you. The agent is the actor; the identity belongs to the human. That asymmetry is the problem.
+Entraclaw is a Python MCP server that gives a device-local agent its own Entra **Agent ID** and an **Agent User** that has all the capabilities of a human user in a Microsoft tenant. It can have a Teams presence and be invited to meetings to chat with your colleagues 1:1, a mailbox it can monitor and respond to, create and edit Word documents, make PowerPoint presentations, and allows you to access your CLI. The agent signs in autonomously, sends Teams messages from its own account, and writes audit events against its own object ID. It runs on macOS, Linux, and Windows, and works with Claude Code, Copilot CLI, or any MCP-speaking client.
 
-entraclaw is a Python MCP server that gives a device-local agent its own Entra ID — an **Agent User** with a Teams presence, a mailbox, an M365 license, and a private key in the OS keystore. The agent signs in autonomously, sends Teams messages from its own account, and writes audit events against its own object ID. It runs on macOS, Linux, and Windows, and works with Claude Code, Copilot CLI, or any MCP-speaking client.
+**All you need to get started is:**
 
-The platform layer landed in May 2026: **Microsoft Entra Agent ID** and **Microsoft Agent 365** (Frontier Suite) went GA on 2026-05-01. entraclaw is the reference implementation that pulls those primitives together on a real device, today.
+* A Free Microsoft 365 Developer tenant (sign up at <https://aka.ms/m365devprogram>)
+* A license that includes Teams and Outlook (E3 or E5 dev tenant licenses work)
+* Python 3.12 installed locally
+
+The scripts will take care of the rest: provisioning the Agent Identity Blueprint, Agent Identity, and Agent User in Entra; uploading a self-signed certificate; assigning the license; and configuring the local MCP server.
+
+ **Microsoft Entra Agent ID** and **Microsoft Agent 365** which enables these expereinces went GA on 2026-05-01. entraclaw is the reference implementation that pulls those primitives together on a real device, today.
 
 ---
 
@@ -18,7 +23,7 @@ A device-local MCP server that turns an LLM agent into a first-class principal i
 - **Authorization.** Conditional Access, ID Protection, and DLP apply to the agent's own object. You can restrict what the agent can do without restricting yourself.
 - **Autonomy.** No device-code prompt, no OBO, no human in the loop on every token refresh. The agent authenticates with its own certificate-backed credentials and minds its own session.
 
-It is for developers building agents on Microsoft 365 who want the security posture to match the architecture. It is not a chat app and not a productivity wrapper. It is the identity layer.
+It is for developers building agents on Microsoft 365 who want the security posture to match the architecture. The agent's smarts are up to you. entraclaw gives it a secure seat at the table and the keys to the kingdom; what it does with that power is your call.
 
 The body prompt (`prompts/agent_system.md` plus `prompts/anatomy/*.md`) is non-overridable and loads before any user turn. Security rules, channel discipline, and instruction-injection defense are baked in below the persona line. An agent that runs on entraclaw cannot be jailbroken into impersonating its operator.
 
@@ -146,5 +151,3 @@ This is a research repo, not a production service. It runs reliably on a develop
 Test discipline is the contract. TDD: failing test first, implementation second. `pytest -v && ruff check .` must pass before every commit; coverage threshold is 80%.
 
 File issues for bugs and platform questions. PRs welcome — for anything touching auth, Teams, or the body prompt, read [`docs/runbooks/hard-won-learnings.md`](docs/runbooks/hard-won-learnings.md) first. The hard-won learnings file is append-only; new gotchas get numbered entries, never deletions.
-
-No formal license file has been added yet. The repo is published for research and reference. If you want to ship something derived from it, open an issue.
