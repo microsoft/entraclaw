@@ -1,5 +1,7 @@
 # Quickstart
 
+**Source:** <https://github.com/brandwe/entraclaw-identity-research>
+
 ## Prerequisites
 
 - **Python 3.12+** on `PATH`
@@ -12,6 +14,8 @@
 ## One-Command Setup (macOS/Linux)
 
 ```bash
+git clone https://github.com/brandwe/entraclaw-identity-research.git
+cd entraclaw-identity-research
 ./scripts/setup.sh
 ```
 
