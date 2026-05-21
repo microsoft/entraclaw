@@ -33,11 +33,15 @@ nav:
   - Architecture:
     - System Overview: architecture/system-overview.md
     - Enforcement Flow: architecture/enforcement-flow.md
+    - Persona-Sati Integration: architecture/DESIGN-persona-sati-integration.md
     - Bot Gateway Design: architecture/DESIGN-teams-bot-gateway.md
     - "Four-Pager: Teams Augmented Token": architecture/FOURPAGER-entraclaw-cli-teams-augmented-token.md
     - Multi-Tenant Lightweight Chat: architecture/PLAN-multi-tenant-lightweight-chat.md
     - Dual-Track Agent Identity: architecture/SPEC-dual-track-agent-identity.md
     - Lightweight Teams Chat: architecture/NEXT-WhatsApp-lightweight-teams-chat.md
+    - "Plan: Files LLM Authoring v2": architecture/PLAN-files-llm-authoring-v2.md
+    - "Plan: Files MCP Tools": architecture/PLAN-files-mcp-tools.md
+    - "Plan: Windows Port": architecture/PLAN-windows-port.md
     - "Next: Tenant & Identity Setup": architecture/next-tenant-identity-setup.md
     - "Next: MCP Server Design": architecture/next-mcp-server-design.md
     - "Next: Windows Dev Environment": architecture/next-windows-dev-environment.md
@@ -47,32 +51,75 @@ nav:
       - Audit: architecture/layers/audit.md
       - Teams Integration: architecture/layers/teams.md
   - Reference:
-    - MCP Tools: reference/mcp-tools.md
+    - Scripts:
+      - Setup: reference/scripts/setup.md
+      - Provisioning: reference/scripts/provisioning.md
+      - Auth and Certs: reference/scripts/auth-and-certs.md
+      - Operations: reference/scripts/operations.md
+      - Diagnostics: reference/scripts/diagnostics.md
+      - Storage: reference/scripts/storage.md
+      - Teardown: reference/scripts/teardown.md
+      - Spikes: reference/scripts/spikes.md
+    - API:
+      - MCP Tools: reference/api/mcp-tools.md
+      - Storage Backends: reference/api/storage-backends.md
+      - Auth: reference/api/auth.md
+      - Identity: reference/api/identity.md
+      - Audit: reference/api/audit.md
+      - Efferent Copy: reference/api/efferent-copy.md
+      - Body Prompt: reference/api/body-prompt.md
     - setup.sh: reference/setup-script.md
     - Token Flows: reference/token-flows.md
+    - "Legacy: MCP Tools": reference/mcp-tools.md
+  - Clients:
+    - Persona-Sati Host Bootstrap: clients/persona-sati-host-bootstrap.md
   - Developer Guide:
     - Engineering Status: engineering-status.md
     - QA Log: developer/qa-log.md
     - Docs Site: developer/docs-site.md
   - Runbooks:
     - Hard-Won Learnings: runbooks/hard-won-learnings.md
-    - "Session: 2026-04-08 Teams Chat": runbooks/session-2026-04-08-teams-chat-transcript.md
+    - MCP Disconnect Investigation: runbooks/mcp-disconnect-investigation.md
+    - Cert Auth Migration: runbooks/cert-auth-migration.md
+    - Windows Setup: runbooks/windows-setup.md
   - Platform Learnings:
+    - Agent ID Blueprints and Users: platform-learnings/agent-id-blueprints-and-users.md
+    - Microsoft Agent 365: platform-learnings/microsoft-agent-365.md
+    - Agent Memory Systems: platform-learnings/agent-memory-systems.md
     - Entra Agent Users: platform-learnings/entra-agent-users.md
-    - GitHub CLI: platform-learnings/github-cli.md
+    - MSAL & Entra Agent IDs: platform-learnings/msal-entra-agent-ids.md
+    - Files Graph API: platform-learnings/files-graph-api.md
     - Teams Graph API: platform-learnings/teams-graph-api.md
     - Teams Bot Framework: platform-learnings/teams-bot-framework.md
     - Teams Toolkit: platform-learnings/teams-toolkit.md
-    - MSAL & Entra Agent IDs: platform-learnings/msal-entra-agent-ids.md
     - MCP Close the Loop: platform-learnings/mcp-close-the-loop.md
     - MCP Messaging Servers: platform-learnings/mcp-messaging-servers.md
+    - GitHub CLI: platform-learnings/github-cli.md
+    - Copilot Extensibility: platform-learnings/copilot-extensibility.md
+    - GitHub Copilot Extensions: platform-learnings/github-copilot-extensions.md
     - macOS Platform: platform-learnings/platform-macos.md
     - Linux Platform: platform-learnings/platform-linux.md
     - Windows Platform: platform-learnings/platform-windows.md
-    - Copilot Extensibility: platform-learnings/copilot-extensibility.md
-    - GitHub Copilot Extensions: platform-learnings/github-copilot-extensions.md
+  - Plans:
+    - Persona Persistence: plans/persona-persistence.md
+    - "Mind-Body Nervous System Phase 3": PLAN-mind-body-nervous-system-phase-3.md
+    - "Persona-Sati Bootstrap Phases 1-2": PLAN-persona-sati-bootstrap-phases-1-2.md
+  - Prompts:
+    - "Agent: Persona-Sati Integration": AGENT-PROMPT-persona-sati-integration.md
+    - "Agent: Provisioner Cert Auth": AGENT-PROMPT-provisioner-cert-auth.md
+    - Multi-Tenant Lightweight Chat Planning: prompts/multi-tenant-lightweight-chat-planning-prompt.md
+  - Ports:
+    - "Claude: Copilot CLI Channel": claude-copilot-cli-channel-port.md
+    - "Claude: Windows": claude-windows-port.md
+    - "OpenAI: Copilot CLI Notifications": openai-copilot-cli-notifications.md
+    - "OpenAI: Windows Agent Identity": openai-windows-agent-identity-port.md
   - Decision Records:
     - Index: decisions/README.md
     - "ADR-001: OBO Flows": decisions/001-obo-flows-for-device-agents.md
     - "ADR-002: Agent User over OBO": decisions/002-agent-user-over-obo.md
     - "ADR-003: Certificate Auth": decisions/003-certificate-auth-over-client-secrets.md
+    - "ADR-005: Cloud-Hosted Memory": decisions/005-cloud-hosted-memory.md
+  - TODOs:
+    - "Security Debt: Provisioner Secret": SECURITY-DEBT-PROVISIONER-SECRET.md
+    - "Persona-Sati Host Bootstrap": TODO-persona-sati-host-bootstrap.md
+    - "Persona-Sati Integration": TODO-persona-sati-integration.md
