@@ -143,6 +143,8 @@ This is a research repo, not a production service. It runs reliably on a develop
 - Audit fails closed: if the audit write fails, the action does not proceed
 - 1,237 tests; `pytest -v && ruff check .` gate every commit
 
+**Persona-sati host bootstrap:** Hosts that attach persona-sati must call `bootstrap_session` before the first substantive answer because FastMCP instructions do not reliably reach the LLM prompt. If `mind_contract_available` is false, operate in body-only mode. When the mind contract is available, follow the per-turn cognition tools: `observe` around external tools, `reflect` for durable observations, and `recall` when a returned memory excerpt is insufficient.
+
 **OS coverage:**
 
 | OS | Status |

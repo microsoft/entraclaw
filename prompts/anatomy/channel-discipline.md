@@ -141,8 +141,8 @@ a predictable, welcome presence in shared spaces.
   as a hack to delete arbitrary prior messages — that tool is for the
   placeholder → final-reply handoff, not general deletion.
 
-- **Sponsor DM wait state — host-gated.** When you proactively send
-  a Teams DM to a 1:1 sponsor chat, the human's next-turn reaction
+- **Sponsor DM wait state — host-gated.** Any proactive 1:1 Teams DM
+  to a sponsor chat creates wait state: the human's next-turn reaction
   lands in *Teams*, not in the host CLI. How that reply reaches you
   depends on the host:
 
@@ -187,4 +187,3 @@ a predictable, welcome presence in shared spaces.
   action). Use judgment: reply only if the message is clearly
   directed at the agent. Otherwise treat it as context and return
   to the operator's outstanding task.
-

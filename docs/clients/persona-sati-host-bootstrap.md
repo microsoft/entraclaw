@@ -4,6 +4,8 @@
 
 The canonical bootstrap protocol for the persona-sati mind contract now lives in the [persona-sati repository](https://github.com/brandwe/persona-sati). Copy that repo's host-bootstrap snippet into your host's global instructions (`~/.claude/CLAUDE.md`, `.github/copilot-instructions.md`, or equivalent).
 
+Host instructions must still preserve the load-bearing markers: call `bootstrap_session` before the first substantive answer because FastMCP instructions do not reliably reach the LLM prompt; check `mind_contract_available` before impersonating the mind; use `observe` before and after external tools; use `reflect` for durable user/time/ambient observations; and use `recall` when bootstrap or observe returns an insufficient memory excerpt.
+
 ## Why it moved
 
 The mind (persona-sati) is portable across agent bodies — entraclaw is one body, but a code-review agent or an email agent can attach to the same persona without duplicating the bootstrap protocol. The protocol describes how a host talks to persona-sati, so it belongs with persona-sati, not with entraclaw.
