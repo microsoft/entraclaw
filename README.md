@@ -166,3 +166,5 @@ This is a research repo, not a production service. It runs reliably on a develop
 Test discipline is the contract. TDD: failing test first, implementation second. `pytest -v && ruff check .` must pass before every commit; coverage threshold is 80%.
 
 File issues for bugs and platform questions. PRs welcome — for anything touching auth, Teams, or the body prompt, read [`docs/runbooks/hard-won-learnings.md`](docs/runbooks/hard-won-learnings.md) first. The hard-won learnings file is append-only; new gotchas get numbered entries, never deletions.
+
+*This is a prototype. Flexible FIC and Entra Agent Identity are preview surfaces — APIs may change. The platform is designed to show the pattern and to be copyable, not to be run as-is in production.*
