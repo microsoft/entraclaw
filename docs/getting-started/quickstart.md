@@ -1,6 +1,6 @@
 # Quickstart
 
-**Source:** <https://github.com/brandwe/entraclaw-identity-research>
+**Source:** <https://github.com/microsoft/Entraclaw>
 
 ## Prerequisites
 
@@ -14,8 +14,8 @@
 ## One-Command Setup (macOS/Linux)
 
 ```bash
-git clone https://github.com/brandwe/entraclaw-identity-research.git
-cd entraclaw-identity-research
+git clone https://github.com/microsoft/Entraclaw.git
+cd Entraclaw
 ./scripts/setup.sh
 ```
 

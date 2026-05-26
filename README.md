@@ -89,8 +89,8 @@ Full walkthrough in [`docs/architecture/system-overview.md`](docs/architecture/s
 Mac or Linux:
 
 ```bash
-git clone https://github.com/brandwe/entraclaw-identity-research.git
-cd entraclaw-identity-research
+git clone https://github.com/microsoft/Entraclaw.git
+cd Entraclaw
 ./scripts/setup.sh --new --with-upn-suffix=yourname
 source .venv/bin/activate
 claude --dangerously-load-development-channels server:entraclaw
@@ -110,7 +110,7 @@ After setup, use `./status.sh` as the canonical health and identity check:
 
 ## Documentation
 
-The full doc site: **<https://brandonwerner.com/entraclaw-identity-research/>**
+The full doc site: **<https://microsoft.github.io/Entraclaw/>**
 
 Direct pointers:
 
