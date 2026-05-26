@@ -89,7 +89,7 @@ Full walkthrough in [`docs/architecture/system-overview.md`](docs/architecture/s
 Mac or Linux:
 
 ```bash
-git clone https://github.com/microsoft/Entraclaw.git
+git clone https://github.com/microsoft/entraclaw.git
 cd Entraclaw
 ./scripts/setup.sh --new --with-upn-suffix=yourname
 source .venv/bin/activate
@@ -110,7 +110,7 @@ After setup, use `./status.sh` as the canonical health and identity check:
 
 ## Documentation
 
-The full doc site: **<https://microsoft.github.io/Entraclaw/>**
+The full doc site: **<https://microsoft.github.io/entraclaw/>**
 
 Direct pointers:
 

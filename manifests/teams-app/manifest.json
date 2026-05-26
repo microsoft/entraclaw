@@ -5,9 +5,9 @@
   "id": "00000000-0000-0000-0000-000000000000",
   "developer": {
     "name": "EntraClaw Research",
-    "websiteUrl": "https://github.com/microsoft/Entraclaw",
-    "privacyUrl": "https://github.com/microsoft/Entraclaw",
-    "termsOfUseUrl": "https://github.com/microsoft/Entraclaw"
+    "websiteUrl": "https://github.com/microsoft/entraclaw",
+    "privacyUrl": "https://github.com/microsoft/entraclaw",
+    "termsOfUseUrl": "https://github.com/microsoft/entraclaw"
   },
   "name": {
     "short": "EntraClaw Agent",

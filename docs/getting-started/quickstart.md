@@ -1,6 +1,6 @@
 # Quickstart
 
-**Source:** <https://github.com/microsoft/Entraclaw>
+**Source:** <https://github.com/microsoft/entraclaw>
 
 ## Prerequisites
 
@@ -14,7 +14,7 @@
 ## One-Command Setup (macOS/Linux)
 
 ```bash
-git clone https://github.com/microsoft/Entraclaw.git
+git clone https://github.com/microsoft/entraclaw.git
 cd Entraclaw
 ./scripts/setup.sh
 ```
