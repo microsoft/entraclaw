@@ -754,7 +754,9 @@ async def _init_poll() -> None:
     if config and config.mode == "bot":
         import asyncio
 
-        _state["poll_task"] = asyncio.get_event_loop().create_task(_background_poll_bot())
+        _state["poll_task"] = _track_background_task(
+            asyncio.get_event_loop().create_task(_background_poll_bot())
+        )
     elif _state.get("watched_chats"):
         _ensure_poll_task_running()
 
@@ -764,10 +766,12 @@ async def _init_poll() -> None:
     if _identity and _identity.session and _identity.session.auth_mode == "agent_user":
         import asyncio
 
-        asyncio.get_event_loop().create_task(_background_poll_email())
-        asyncio.get_event_loop().create_task(_background_daily_summary())
-        asyncio.get_event_loop().create_task(_background_discover_chats())
-        asyncio.get_event_loop().create_task(_background_persona_sati_heartbeat())
+        _track_background_task(asyncio.get_event_loop().create_task(_background_poll_email()))
+        _track_background_task(asyncio.get_event_loop().create_task(_background_daily_summary()))
+        _track_background_task(asyncio.get_event_loop().create_task(_background_discover_chats()))
+        _track_background_task(
+            asyncio.get_event_loop().create_task(_background_persona_sati_heartbeat())
+        )
 
 
 async def _initialize() -> None:
@@ -806,6 +810,37 @@ BOT_POLL_INTERVAL = 2  # seconds between bot inbound file checks
 EMAIL_POLL_INTERVAL = 60  # seconds between /me/messages polls
 CHAT_DISCOVER_INTERVAL = 120  # seconds between /me/chats auto-discovery sweeps
 PERSONA_SATI_HEARTBEAT_INTERVAL = 300  # 5 min smoke test against persona-sati
+
+
+def _track_background_task(task) -> object:
+    """Register *task* so stdio shutdown can cancel background polls."""
+    tasks = _state.setdefault("background_tasks", [])
+    tasks.append(task)
+    return task
+
+
+async def _shutdown_background_tasks() -> None:
+    """Cancel every background poll/scheduler task on stdio disconnect."""
+    import asyncio
+
+    tasks: list[asyncio.Task] = []
+    poll_task = _state.get("poll_task")
+    if poll_task is not None:
+        tasks.append(poll_task)
+    tasks.extend(_state.get("background_tasks", []))
+    seen: set[int] = set()
+    unique: list[asyncio.Task] = []
+    for task in tasks:
+        if id(task) in seen:
+            continue
+        seen.add(id(task))
+        unique.append(task)
+    for task in unique:
+        task.cancel()
+    if unique:
+        await asyncio.gather(*unique, return_exceptions=True)
+    _state["background_tasks"] = []
+    _state.pop("poll_task", None)
 
 
 async def _persona_sati_list_files(url: str, token: str) -> list[str]:
@@ -1001,7 +1036,9 @@ def _ensure_poll_task_running() -> None:
 
     import asyncio
 
-    _state["poll_task"] = asyncio.get_event_loop().create_task(_background_poll())
+    _state["poll_task"] = _track_background_task(
+        asyncio.get_event_loop().create_task(_background_poll())
+    )
     if logger:
         logger.info("Started background Teams poll task")
 
@@ -1515,7 +1552,11 @@ async def _background_daily_summary() -> None:
     """Wake at 5pm PDT each day and send the daily summary."""
     import asyncio
 
-    from entraclaw.tools.daily_summary import next_run_at
+    from entraclaw.tools.daily_summary import (
+        next_run_at,
+        scheduled_summary_day,
+        summary_already_sent,
+    )
 
     if logger:
         logger.info("Starting daily summary scheduler")
@@ -1538,10 +1579,20 @@ async def _background_daily_summary() -> None:
             ):
                 continue
 
-            result = await _run_daily_summary_internal(send=True)
+            target_day = scheduled_summary_day(now=datetime.now(UTC))
+            if summary_already_sent(target_day):
+                if logger:
+                    logger.info("Daily summary for %s already sent; skipping", target_day)
+                continue
+
+            result = await _run_daily_summary_internal(day=target_day, send=True)
             if logger:
                 logger.info("Daily summary sent: %s", result)
 
+        except asyncio.CancelledError:
+            if logger:
+                logger.info("Daily summary scheduler cancelled")
+            raise
         except Exception as exc:
             if logger:
                 logger.warning("Daily summary scheduler error: %s", exc)
@@ -3403,6 +3454,7 @@ async def _run_stdio_with_write_stream() -> None:
             )
         finally:
             init_task.cancel()
+            await _shutdown_background_tasks()
 
 
 @mcp.tool()

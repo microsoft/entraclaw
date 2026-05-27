@@ -52,6 +52,7 @@ class PersonaReport:
     copied: int = 0
     skipped: int = 0
     pulled: int = 0
+    skipped_local_newer: int = 0
     errors: list[tuple[str, str]] = field(default_factory=list)
     keys: list[str] = field(default_factory=list)
 
@@ -118,20 +119,33 @@ class PersonaBackend:
     def pull_all(self) -> PersonaReport:
         """Download every blob under ``claude_memory/`` into ``local_root``.
 
-        Cloud is authoritative on pull — local files are overwritten.
-        The directory (and parents) are created if missing.
+        Cloud is authoritative on pull unless a local file is newer than
+        its cloud counterpart (offline session wrote ahead of the last
+        pull). The directory (and parents) are created if missing.
         """
         report = PersonaReport()
         for key in self._backend.list(self.prefix):
             if not key.startswith(self.prefix):
                 continue
             rel = key[len(self.prefix) :]
+            dst = self._root / rel
+            if dst.exists() and dst.is_file():
+                cloud_mtime = self._cloud_mtime(key)
+                if cloud_mtime is not None and dst.stat().st_mtime > cloud_mtime:
+                    report.skipped_local_newer += 1
+                    continue
             content = self._backend.read_text(key)
             if content is None:
                 continue
-            dst = self._root / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_text(content)
             report.pulled += 1
             report.keys.append(key)
         return report
+
+    def _cloud_mtime(self, key: str) -> float | None:
+        """Return cloud key mtime as Unix seconds, or None if unavailable."""
+        mtime_fn = getattr(self._backend, "key_mtime", None)
+        if mtime_fn is None:
+            return None
+        return mtime_fn(key)
