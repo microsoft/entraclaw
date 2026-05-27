@@ -1,6 +1,6 @@
 # Engineering Status
 
-**Last updated:** 2026-05-21
+**Last updated:** 2026-05-27
 **Status:** v1 released. Three auth modes (Agent User / Delegated / Bot Gateway) running locally on macOS, Linux, and ARM64 Windows 11. **1,237 tests** across the suite, ruff clean. Body-first prompt architecture loads at boot; persona-sati MCP wires personality and memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped — blob storage is opt-in via `setup.sh --use-cloud-memory`. Work IQ Word migration landed (PR #75) and the `send_teams_message` auto-wait pattern is host-gated and deterministic. README, docs site, and GitHub Pages auto-deploy refreshed 2026-05-21.
 
 ---
@@ -9,11 +9,8 @@
 
 Source of truth for detail: `TODOS.md` in the repository root. One line each below.
 
+- **Test isolation: blob env leakage** — partial fix in test fixtures; session-scoped autouse fixture still open.
 - **Script-toolkit docs closeout** — `./status.sh` is the canonical entry; finish the remaining script-reference polish and smoke verification. See `TODOS.md` P1.
-- **Test isolation: blob env leakage** — `tmp_data_dir` fixture in `tests/tools/test_interaction_log.py` doesn't clear `ENTRACLAW_BLOB_ENDPOINT`; 10 tests fail on any machine with blob env configured.
-- **MCP server orphans on Claude Code exit** — background poll tasks sit outside FastMCP's lifespan cancel scope; new sessions spawn a second server, both poll Graph independently.
-- **Daily summary scheduler — wrong day + double-fire** — UTC-based `target_day` summarizes the brand-new UTC day at 5pm PDT; scheduler fired twice at the same second on 2026-04-17.
-- **Email cursor sub-second precision** — cursor file at second precision; an email at the cursor's exact second gets re-pushed once on every server restart.
 
 ## Recently Shipped
 

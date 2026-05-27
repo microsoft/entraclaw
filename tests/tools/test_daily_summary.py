@@ -29,7 +29,9 @@ from entraclaw.tools.daily_summary import (
     archive_summary,
     next_run_at,
     render_summary_html,
+    scheduled_summary_day,
     send_summary_email,
+    summary_already_sent,
     triage_interactions,
 )
 
@@ -375,3 +377,28 @@ class TestNextRunAt:
         now = datetime(2026, 4, 17, 0, 0, tzinfo=UTC)
         nxt = next_run_at(now=now)
         assert nxt == datetime(2026, 4, 18, 0, 0, tzinfo=UTC)
+
+
+class TestScheduledSummaryDay:
+    def test_at_5pm_pdt_uses_previous_utc_day(self) -> None:
+        # 5pm PDT on 2026-04-16 = 2026-04-17 00:00 UTC — summarize 2026-04-16.
+        now = datetime(2026, 4, 17, 0, 0, tzinfo=UTC)
+        assert scheduled_summary_day(now=now) == "2026-04-16"
+
+    def test_before_5pm_pdt_still_uses_previous_utc_day_at_trigger(self) -> None:
+        # Scheduler fires at next_run_at(); at that instant UTC has rolled.
+        trigger = datetime(2026, 4, 17, 0, 0, tzinfo=UTC)
+        assert scheduled_summary_day(now=trigger) == "2026-04-16"
+
+
+class TestSummaryAlreadySent:
+    def test_false_when_sidecar_missing(self, tmp_data_dir: Path) -> None:
+        assert summary_already_sent("2026-04-16") is False
+
+    def test_true_when_sidecar_exists(self, tmp_data_dir: Path) -> None:
+        archive_summary(
+            day="2026-04-16",
+            html="<p>hi</p>",
+            buckets={"needs_you": [], "handled": [], "heads_up": []},
+        )
+        assert summary_already_sent("2026-04-16") is True

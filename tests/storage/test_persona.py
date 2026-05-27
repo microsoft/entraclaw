@@ -146,17 +146,31 @@ class TestPersonaBackendPullAll:
         assert report.pulled == 3
 
     def test_pull_all_overwrites_local_with_cloud(self, tmp_path: Path) -> None:
-        # Cloud is authoritative on pull
+        # Cloud is authoritative on pull when the blob is newer than local.
         backend = LocalBackend(tmp_path / "blob")
-        backend.write_text("claude_memory/MEMORY.md", "CLOUD")
         mem_dir = tmp_path / "memory"
         mem_dir.mkdir()
         (mem_dir / "MEMORY.md").write_text("stale local")
+        backend.write_text("claude_memory/MEMORY.md", "CLOUD")
 
         persona = PersonaBackend(backend, local_root=mem_dir)
         persona.pull_all()
 
         assert (mem_dir / "MEMORY.md").read_text() == "CLOUD"
+
+    def test_pull_all_skips_when_local_newer_than_cloud(self, tmp_path: Path) -> None:
+        backend = LocalBackend(tmp_path / "blob")
+        backend.write_text("claude_memory/MEMORY.md", "CLOUD")
+        mem_dir = tmp_path / "memory"
+        mem_dir.mkdir()
+        (mem_dir / "MEMORY.md").write_text("offline edit")
+
+        persona = PersonaBackend(backend, local_root=mem_dir)
+        report = persona.pull_all()
+
+        assert (mem_dir / "MEMORY.md").read_text() == "offline edit"
+        assert report.pulled == 0
+        assert report.skipped_local_newer == 1
 
     def test_pull_all_when_cloud_empty_returns_empty(self, tmp_path: Path) -> None:
         backend = LocalBackend(tmp_path / "blob")

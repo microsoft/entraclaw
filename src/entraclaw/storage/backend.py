@@ -103,6 +103,12 @@ class LocalBackend:
                 results.append(rel)
         return results
 
+    def key_mtime(self, key: str) -> float | None:
+        p = self._path(key)
+        if not p.exists():
+            return None
+        return p.stat().st_mtime
+
 
 # ---------------------------------------------------------------------------
 # BlobBackend
@@ -154,6 +160,9 @@ class BlobBackend:
 
     def list(self, prefix: str = "") -> list[str]:
         return list(_run_sync(self._store.list(prefix)))
+
+    def key_mtime(self, key: str) -> float | None:
+        return _run_sync(self._store.last_modified(key))
 
 
 # ---------------------------------------------------------------------------

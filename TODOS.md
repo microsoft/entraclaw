@@ -40,23 +40,23 @@ Fix: make the `tmp_data_dir` fixture (and any sibling fixture that patches confi
 - **Effort:** S (~30 LOC — fixture edit + audit)
 - **Source:** Phase 6a review 2026-04-17; failure is pre-existing on main, not introduced by Phase 6a
 
-### PersonaBackend.pull_all() missing mtime-newer-local check (Phase 6d scope)
+### ~~PersonaBackend.pull_all() missing mtime-newer-local check (Phase 6d scope)~~ ✅ DONE
 `src/entraclaw/storage/persona.py` `pull_all()` currently overwrites local files unconditionally — cloud is authoritative on pull. The persona-persistence plan §4.2 specified: "If local is newer (happens if session was offline), leave it (to be pushed next)." Phase 6a shipped without that check for the safe-starting-point framing, but it's a race-loss risk: if a session writes a memory file offline, the next online session's SessionStart pull will clobber it before the PostToolUse-Write push fires. The mitigation of this was planned for Phase 6d (ETag-based conflict resolution) but the simple mtime check should land sooner.
 Fix: compare local file mtime vs blob's last-modified on pull, skip overwrite if local is newer, add to `PersonaReport` a new `skipped_local_newer` counter. Test: pytest fixture with a local file newer than the (fake) blob's content → pull_all must leave it.
-- **Effort:** XS (~20 LOC + 2 tests)
+- **Shipped:** mtime compare via `key_mtime()` on Local/Blob backends (PR pending).
 - **Depends on:** Phase 6a (`1514dcd`, shipped)
 - **Source:** Phase 6a review 2026-04-17; plan §4.2 said we'd do this, Phase 6a deferred
 
-### MCP server orphans when Claude Code exits
+### ~~MCP server orphans when Claude Code exits~~ ✅ DONE (partial)
 Observed twice: when the parent Claude process exits, the `entraclaw-mcp` child keeps running. The new Claude session spawns a *second* MCP server, and both servers poll Graph independently — causing dual interaction-log writes (observed 2026-04-17: local log 54 lines vs blob log 19 lines on the same UTC day) and dual channel-push attempts. Root cause: `_background_poll_teams`, `_background_poll_email`, `_background_discover_chats`, and `_background_daily_summary` are spawned as top-level asyncio tasks inside `_initialize()`. They sit outside FastMCP's lifespan cancel scope, so when stdin closes and FastMCP's stdio read loop exits, the polling tasks keep the event loop alive and the process never terminates. Fixes in priority order: (a) spawn background tasks inside FastMCP's lifespan context manager so shutdown cancels them, (b) explicitly watch stdin for EOF in `_initialize` and cancel the task group, or (c) have polling tasks poll a shared shutdown event that FastMCP's stop hook sets. Workaround until fixed: manually `kill <pid>` old `entraclaw-mcp` processes.
-- **Effort:** S (~40 LOC + test that proves stdin-EOF cancels polls)
+- **Shipped:** `_shutdown_background_tasks()` cancels tracked poll tasks when stdio disconnects (PR pending). Process singleton flock (issue #62) also prevents duplicate live servers on macOS/Linux.
 - **Source:** Live observation 2026-04-17 (second occurrence in one day)
 
-### Daily summary scheduler: wrong day + double-fire
+### ~~Daily summary scheduler: wrong day + double-fire~~ ✅ DONE
 Two bugs, both observed at 2026-04-17T17:00:00 PDT (= 00:00:01 UTC 2026-04-18):
 1. `_run_daily_summary_internal` defaults `target_day = datetime.now(UTC).strftime("%Y-%m-%d")`. At 5pm PDT the UTC clock is already past midnight, so the scheduler summarizes the brand-new UTC day (empty) instead of the one that just ended. Fix: when called from the scheduler, target `now_utc - 1 day` — or compute the "just-ended PDT day" explicitly.
 2. Scheduler fired twice at the same second — two summary emails arrived simultaneously (one for 2026-04-17, one for 2026-04-18). Suggests either a boot-time catch-up colliding with the scheduled tick or a loop that doesn't gate on "already sent today." Inspect `_background_daily_summary` for idempotency + single-fire semantics.
-- **Effort:** S (~30 LOC + tests for both)
+- **Shipped:** `scheduled_summary_day()` + `summary_already_sent()` gate in the scheduler (PR pending).
 - **Source:** Live observation 2026-04-17 evening (first real scheduled fire)
 
 ### Email cursor sub-second precision

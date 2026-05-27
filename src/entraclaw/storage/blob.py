@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from email.utils import parsedate_to_datetime
 
 import httpx
 
@@ -113,6 +114,19 @@ class BlobStore:
                 return False
             resp.raise_for_status()
             return True
+
+    async def last_modified(self, path: str) -> float | None:
+        """Return blob Last-Modified as Unix seconds, or None if missing."""
+        async with httpx.AsyncClient() as client:
+            resp = await client.head(self._url(path), headers=self._headers())
+            _check_auth(resp)
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            header = resp.headers.get("Last-Modified")
+            if not header:
+                return None
+            return parsedate_to_datetime(header).timestamp()
 
     async def list(self, prefix: str = "") -> list[str]:
         """Return blob names in the container under *prefix*."""

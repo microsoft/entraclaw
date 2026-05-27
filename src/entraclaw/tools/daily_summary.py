@@ -215,3 +215,19 @@ def next_run_at(*, now: datetime, hour_pdt: int = 17) -> datetime:
     if pdt_now >= trigger:
         trigger = trigger + timedelta(days=1)
     return (trigger + PDT_OFFSET).replace(tzinfo=UTC)
+
+
+def scheduled_summary_day(*, now: datetime) -> str:
+    """Return the UTC day label to summarize when the 5pm PDT job fires.
+
+    At 5pm PDT the UTC calendar has already rolled forward, so naive
+    ``datetime.now(UTC).strftime('%Y-%m-%d')`` targets an empty new UTC
+    day instead of the one that just accumulated activity.
+    """
+    return (now - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def summary_already_sent(day: str) -> bool:
+    """Return True when the archived sidecar for *day* already exists."""
+    backend = get_backend()
+    return backend.exists(f"summaries/{day}.json")
