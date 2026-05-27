@@ -1,6 +1,6 @@
 # Quickstart
 
-**Source:** <https://github.com/microsoft/entraclaw>
+**Source:** <https://github.com/brandwe/entraclaw-identity-research>
 
 ## Prerequisites
 
@@ -14,8 +14,8 @@
 ## One-Command Setup (macOS/Linux)
 
 ```bash
-git clone https://github.com/microsoft/entraclaw.git
-cd Entraclaw
+git clone https://github.com/brandwe/entraclaw-identity-research.git
+cd entraclaw-identity-research
 ./scripts/setup.sh
 ```
 
@@ -47,6 +47,50 @@ See `docs/reference/setup-script.md` for the full flag list, and `docs/guides/st
    source .venv/bin/activate
    pytest -v --cov=entraclaw --cov-report=term-missing
    ```
+
+## Launching the Agent
+
+The repo isn't published to npm or pypi — your host CLI loads the local stdio MCP server from `.mcp.json` in the current directory. No flag is needed for that part; MCP servers in `.mcp.json` are auto-discovered. What differs between hosts is **how inbound Teams DMs reach the agent**.
+
+### Claude Code (recommended)
+
+Channel push: inbound Teams messages and emails arrive as next-turn system reminders without a tool call. Requires the dev-channel allowlist flag:
+
+```bash
+claude --dangerously-load-development-channels server:entraclaw
+```
+
+The double-dash matters. Single-dash silently treats `server:entraclaw` as prompt text — see Learning #44 in [`docs/runbooks/hard-won-learnings.md`](../runbooks/hard-won-learnings.md). `server:entraclaw` is the MCP server name from `.mcp.json`, not a publication identifier — the value matches the key inside the `mcpServers` object in `.mcp.json`.
+
+### GitHub Copilot CLI, Codex, Cursor, and other non-Claude hosts
+
+MCP tools work, but there is no `notifications/claude/channel` equivalent — channel push is silently absent. Inbound Teams messages instead arrive **inline** as a `sponsor_reply` field on `send_teams_message`, which auto-blocks until the sponsor replies. This is host-detected on the server side; no flag, no parameter:
+
+```bash
+copilot   # or: codex, cursor, etc. — no flag, just launch from the repo dir
+```
+
+While the agent is blocked waiting on a Teams reply (any host that calls `wait_for_sponsor_dm` explicitly, or the auto-wait inside `send_teams_message` on non-Claude hosts), the host CLI shows a heartbeat animation so you know it is listening to Teams, not your keyboard:
+
+```
+           __
+      (___()'`;  woof! 🐕
+      /,    /`
+      \"--\
+
+(•ᴗ•) zZz... listening for Teams DM [42s] (Ctrl+C to break)
+```
+
+Frames cycle every ~30s with an elapsed-time counter:
+
+- `(•ᴗ•) zZz... listening for Teams DM`
+- `(•ᴗ•)╯ checking inbox`
+- `ʕ•ᴥ•ʔ waiting on sponsor`
+- `(´･ω･`) sponsor hasn't replied yet`
+- `(╯°□°)╯ Teams DM = next turn`
+- `(◕‿◕) still here, still waiting`
+
+Ctrl+C breaks out cleanly. Full host-by-host protocol is in [`docs/claude-copilot-cli-channel-port.md`](../claude-copilot-cli-channel-port.md) and [`prompts/anatomy/channel-discipline.md`](../../prompts/anatomy/channel-discipline.md).
 
 ## Common Pitfalls
 

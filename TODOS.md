@@ -1,5 +1,20 @@
 # TODOS
 
+## P0 — DO NEXT
+
+### persona-sati: implement /authorize + /token PKCE flow (blocks Claude Code SSE)
+Claude Code v2.1.152 now does MCP OAuth 2.1 discovery and ignores `.mcp.json` `headersHelper` when the server advertises OAuth metadata. Persona-sati advertises metadata (ADR-006 in persona-sati) but never shipped the browser PKCE `/authorize` endpoint — clicking "Authenticate" in Claude Code's `/mcp` UI lands on `{"error":"invalid_request","error_description":"Missing or malformed Authorization header"}`.
+
+**Current workaround:** entraclaw's `.mcp.json` was rewritten to use the persona-sati **stdio shim** (`persona-sati-stdio-shim.sh`) instead of native SSE+headersHelper. Works, but moves Claude Code users off the path ADR-005 designed around (SSE-native with mid-session token refresh).
+
+**Tracking:** persona-sati issue tracker. Fix lives in persona-sati, not here.
+
+**Bonus bug surfaced:** `persona-sati/scripts/setup.sh` line 280 gates the `.mcp.json` rewire behind `! --skip-deploy`, so `--mcp-transport=stdio --skip-deploy` silently fails to rewrite. Workaround: invoke `wire_mcp_json.py` directly. Also tracked in the persona-sati issue tracker.
+
+- **Effort:** M (persona-sati side — auth design decision + `/authorize` consent page + `/token` PKCE + redirect-URI allowlist on DCR). No work in this repo until persona-sati ships.
+- **Depends on:** persona-sati design choice for browser-flow identity binding (Entra device-code? B2B SSO? localhost-only?).
+- **Source:** Diagnosed 2026-05-27 in entraclaw session — Claude Code v2.1.152.
+
 ## P1
 
 ### Script toolkit final phase: README + GitHub Pages script reference
@@ -59,9 +74,9 @@ Two bugs, both observed at 2026-04-17T17:00:00 PDT (= 00:00:01 UTC 2026-04-18):
 - **Effort:** S (~30 LOC + tests for both)
 - **Source:** Live observation 2026-04-17 evening (first real scheduled fire)
 
-### ~~Email cursor sub-second precision~~ ✅ DONE
+### Email cursor sub-second precision
 `email_poll.poll_once` returns `latest_ts` verbatim from Graph; the cursor file may end up at second precision while Graph internally compares with sub-second. Result: an email at the cursor's exact second gets re-returned every poll. Per-session dedup in `_background_poll_email` handles within-session, but the email re-pushes once on every server restart. Real fix: bump cursor by 1ms when it equals the latest receivedDateTime, or store sub-second precision unconditionally.
-- **Shipped:** `advance_cursor()` bumps the poll watermark by 1 ms after each batch (PR pending).
+- **Effort:** XS (~10 LOC + 1 test)
 - **Source:** Live observation 2026-04-17 (a teammate's "Ball game tonight" loop)
 
 ### ~~Token auto-refresh in teams_send~~ ✅ DONE
