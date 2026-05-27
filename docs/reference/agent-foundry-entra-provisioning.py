@@ -469,11 +469,9 @@ def verify_graph_preflight(token, checks):
 def bootstrap_cli():
     try:
         required_values = build_required_permission_values(include_ca=True)
-        provisioner_app_id, _, tenant_id = ensure_app_registration(required_values)
+        ensure_app_registration(required_values)
         print("")
         print("Provisioner bootstrap complete")
-        print(f"  Tenant:      {tenant_id}")
-        print(f"  App ID:      {provisioner_app_id}")
         print(f"  Permissions: {', '.join(required_values)}")
         return 0
     except ProvisionerBootstrapError as exc:

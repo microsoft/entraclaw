@@ -665,12 +665,8 @@ def ensure_app_registration(
     # backdoor — remove them unconditionally. This closes the window
     # opened by the secret-auth era.
     try:
-        removed = _remove_legacy_password_credentials(client_id)
-        if removed:
-            print(
-                f"  Removed {removed} legacy app credential(s) from "
-                f"Provisioner app (cert-auth only from here on)."
-            )
+        if _remove_legacy_password_credentials(client_id):
+            print("  Removed legacy app credentials from Provisioner app.")
     except ProvisionerBootstrapError as exc:
         print(f"  WARN: could not enumerate/delete legacy app credentials: {type(exc).__name__}")
 
@@ -797,11 +793,9 @@ def bootstrap_cli() -> int:
     """Bootstrap the provisioner app and print summary."""
     try:
         required_values = build_required_permission_values()
-        client_id, _, tenant_id = ensure_app_registration(required_values)
+        ensure_app_registration(required_values)
         print("")
         print("Provisioner bootstrap complete")
-        print(f"  Tenant:      {tenant_id}")
-        print(f"  Client ID:   {client_id}")
         print(f"  Permissions: {', '.join(required_values)}")
         return 0
     except ProvisionerBootstrapError as exc:
