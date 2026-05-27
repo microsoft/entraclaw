@@ -324,9 +324,14 @@ class TestLoadAgentInstructionsPersonaSati:
         with caplog.at_level(logging.INFO, logger="entraclaw"):
             _load_agent_instructions()
 
-        msgs = [r.getMessage() for r in caplog.records if r.name == "entraclaw"]
+        records = [r for r in caplog.records if r.name == "entraclaw"]
+        msgs = [r.getMessage() for r in records]
         assert any("persona-sati prompt loaded" in m for m in msgs), msgs
-        assert any("https://persona.example" in m for m in msgs), msgs
+        assert any(
+            r.msg == "persona-sati prompt loaded (url=%s, body_chars=%d, persona_chars=%d)"
+            and r.args[0] == "https://persona.example"
+            for r in records
+        ), msgs
 
     def test_persona_env_unset_is_logged(
         self,

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -234,9 +235,8 @@ class TestAcquireAgentUserToken:
 
             acquire_agent_user_token(get_config())
 
-        hop3_body = dict(x.split("=") for x in route.calls[2].request.content.decode().split("&"))
-        # URL-encoded "https://graph.microsoft.com/.default"
-        assert "graph.microsoft.com" in hop3_body["scope"]
+        hop3_body = parse_qs(route.calls[2].request.content.decode())
+        assert hop3_body["scope"] == ["https://graph.microsoft.com/.default"]
 
     @respx.mock
     def test_resource_scope_override(self) -> None:
@@ -261,13 +261,13 @@ class TestAcquireAgentUserToken:
 
         assert token == "storage-token"
         # Hops 1 and 2 still target the FIC exchange scope
-        hop1_body = dict(x.split("=") for x in route.calls[0].request.content.decode().split("&"))
-        hop2_body = dict(x.split("=") for x in route.calls[1].request.content.decode().split("&"))
-        assert "AzureADTokenExchange" in hop1_body["scope"]
-        assert "AzureADTokenExchange" in hop2_body["scope"]
+        hop1_body = parse_qs(route.calls[0].request.content.decode())
+        hop2_body = parse_qs(route.calls[1].request.content.decode())
+        assert hop1_body["scope"] == ["api://AzureADTokenExchange/.default"]
+        assert hop2_body["scope"] == ["api://AzureADTokenExchange/.default"]
         # Hop 3 carries the storage resource
-        hop3_body = dict(x.split("=") for x in route.calls[2].request.content.decode().split("&"))
-        assert "storage.azure.com" in hop3_body["scope"]
+        hop3_body = parse_qs(route.calls[2].request.content.decode())
+        assert hop3_body["scope"] == ["https://storage.azure.com/.default"]
 
 
 class TestAcquireAgentUserStorageToken:
@@ -292,8 +292,8 @@ class TestAcquireAgentUserStorageToken:
             token = acquire_agent_user_storage_token(get_config())
 
         assert token == "storage-tok"
-        hop3_body = dict(x.split("=") for x in route.calls[2].request.content.decode().split("&"))
-        assert "storage.azure.com" in hop3_body["scope"]
+        hop3_body = parse_qs(route.calls[2].request.content.decode())
+        assert hop3_body["scope"] == ["https://storage.azure.com/.default"]
 
 
 # ---------------------------------------------------------------------------

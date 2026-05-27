@@ -247,7 +247,7 @@ def create_bot_app(adapter: BotFrameworkAdapter, bot: EntraClawBot) -> web.Appli
             return web.Response(status=401, text="Unauthorized")
         except Exception as exc:
             logger.error("Failed to process activity: %s", exc)
-            return web.Response(status=500, text=str(exc))
+            return web.Response(status=500, text="Internal server error")
 
     async def health(request: web.Request) -> web.Response:
         return web.json_response({"status": "ok"})

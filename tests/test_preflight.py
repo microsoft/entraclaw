@@ -83,7 +83,12 @@ class TestCheckTeamsLicenseAvailability:
             result = check_teams_license_availability("fake-token")
 
         assert result.status == "warn"
-        assert "admin.microsoft.com" in (result.remediation or "")
+        assert result.remediation == (
+            "Buy a Teams-capable license at "
+            "https://admin.microsoft.com/Adminportal/Home#/catalog "
+            "(or any Teams-capable license: M365 Business Premium, E3, E5, etc.)"
+            " and re-run setup.sh, or assign an existing license manually before testing."
+        )
 
     def test_warn_when_teams_sku_exists_but_all_seats_consumed(self) -> None:
         with respx.mock:

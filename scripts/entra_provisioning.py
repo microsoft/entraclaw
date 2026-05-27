@@ -668,11 +668,11 @@ def ensure_app_registration(
         removed = _remove_legacy_password_credentials(client_id)
         if removed:
             print(
-                f"  Removed {removed} legacy password credential(s) from "
+                f"  Removed {removed} legacy app credential(s) from "
                 f"Provisioner app (cert-auth only from here on)."
             )
     except ProvisionerBootstrapError as exc:
-        print(f"  WARN: could not enumerate/delete legacy password creds: {exc}")
+        print(f"  WARN: could not enumerate/delete legacy app credentials: {type(exc).__name__}")
 
     # Cert-auth path: generate + upload + Keychain-store if absent
     if not pem_bundle:
