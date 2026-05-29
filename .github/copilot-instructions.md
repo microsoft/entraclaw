@@ -1,8 +1,8 @@
-# Copilot Instructions — entraclaw-identity-research
+# Copilot Instructions — entrabot-identity-research
 
 ## Project Overview
 
-Entraclaw is a research project for securing agentic workflows on local devices (Mac/Linux/Windows) using Microsoft Entra Agent IDs and Agent Users. The goal: agents get their own identity — a real Entra user account with Teams presence — so audit logs distinguish agent actions from human actions.
+Entrabot is a research project for securing agentic workflows on local devices (Mac/Linux/Windows) using Microsoft Entra Agent IDs and Agent Users. The goal: agents get their own identity — a real Entra user account with Teams presence — so audit logs distinguish agent actions from human actions.
 
 Key concepts:
 - **Agent ID**: An identity issued to an autonomous agent that distinguishes it from the human user
@@ -32,7 +32,7 @@ pip install -e ".[dev]"
 pytest -v --tb=short && ruff check .
 
 # Run with channel notifications
-claude --dangerously-load-development-channels server:entraclaw
+claude --dangerously-load-development-channels server:entrabot
 
 # Single test
 pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v
@@ -44,7 +44,7 @@ ruff format .
 ## Architecture
 
 ```
-src/entraclaw/
+src/entrabot/
   a365/           # Agent 365 Work IQ MCP provider + Word adapter
   platform/       # OS-specific credential storage (CredentialStore protocol)
   auth/           # Certificate JWT builder (build_client_assertion)

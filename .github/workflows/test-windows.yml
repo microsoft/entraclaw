@@ -37,7 +37,7 @@ jobs:
         env:
           # Force LocalBackend so blob-token paths don't accidentally fire
           # in CI. (CI has no managed identity for the storage account.)
-          ENTRACLAW_KEEP_MEMORY_LOCAL: 'true'
+          ENTRABOT_KEEP_MEMORY_LOCAL: 'true'
 
       - name: Lint
         run: ruff check .

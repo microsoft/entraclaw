@@ -29,7 +29,7 @@
         ]
       },
       {
-        "matcher": "^mcp__entraclaw__(send_email|send_teams_message|send_card|add_teams_member|create_chat|delete_teams_message)$",
+        "matcher": "^mcp__entrabot__(send_email|send_teams_message|send_card|add_teams_member|create_chat|delete_teams_message)$",
         "hooks": [
           {
             "type": "command",
@@ -41,7 +41,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__entraclaw__send_teams_message",
+        "matcher": "mcp__entrabot__send_teams_message",
         "hooks": [
           {
             "type": "command",

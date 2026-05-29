@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "entraclaw": {
+    "entrabot": {
       "type": "stdio",
-      "command": ".venv/bin/entraclaw-mcp",
+      "command": ".venv/bin/entrabot-mcp",
       "args": [],
-      "description": "EntraClaw Agent Identity — Teams tools + background DM/email poll"
+      "description": "EntraBot Agent Identity — Teams tools + background DM/email poll"
     },
     "persona-sati": {
       "type": "sse",

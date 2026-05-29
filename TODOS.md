@@ -1,5 +1,20 @@
 # TODOS
 
+## P0 — DO NEXT
+
+### persona-sati: implement /authorize + /token PKCE flow (blocks Claude Code SSE)
+Claude Code v2.1.152 now does MCP OAuth 2.1 discovery and ignores `.mcp.json` `headersHelper` when the server advertises OAuth metadata. Persona-sati advertises metadata (ADR-006 in persona-sati) but never shipped the browser PKCE `/authorize` endpoint — clicking "Authenticate" in Claude Code's `/mcp` UI lands on `{"error":"invalid_request","error_description":"Missing or malformed Authorization header"}`.
+
+**Current workaround:** entrabot's `.mcp.json` was rewritten to use the persona-sati **stdio shim** (`persona-sati-stdio-shim.sh`) instead of native SSE+headersHelper. Works, but moves Claude Code users off the path ADR-005 designed around (SSE-native with mid-session token refresh).
+
+**Tracking:** persona-sati issue tracker. Fix lives in persona-sati, not here.
+
+**Bonus bug surfaced:** `persona-sati/scripts/setup.sh` line 280 gates the `.mcp.json` rewire behind `! --skip-deploy`, so `--mcp-transport=stdio --skip-deploy` silently fails to rewrite. Workaround: invoke `wire_mcp_json.py` directly. Also tracked in the persona-sati issue tracker.
+
+- **Effort:** M (persona-sati side — auth design decision + `/authorize` consent page + `/token` PKCE + redirect-URI allowlist on DCR). No work in this repo until persona-sati ships.
+- **Depends on:** persona-sati design choice for browser-flow identity binding (Entra device-code? B2B SSO? localhost-only?).
+- **Source:** Diagnosed 2026-05-27 in entrabot session — Claude Code v2.1.152.
+
 ## P1
 
 ### Script toolkit final phase: README + GitHub Pages script reference

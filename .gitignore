@@ -19,15 +19,15 @@ venv/
 .mypy_cache/
 .pyright/
 .openclaw-state.json
-.entraclaw-state.json
-.entraclaw-state.json.bak.*
+.entrabot-state.json
+.entrabot-state.json.bak.*
 .mcp.json
 a365.config.json
 a365.generated.config.json
 ToolingManifest.json
 .coverage
-entraclaw-state-export.tar.gz.enc
-entraclaw_msal_cache
+entrabot-state-export.tar.gz.enc
+entrabot_msal_cache
 tests/smoke/logs/
 *.zip
 
@@ -50,3 +50,4 @@ pip.ini
 # Internal session transcripts and personal planning docs
 docs/runbooks/session-*.md
 docs/superpowers/
+.entraclaw-state.json

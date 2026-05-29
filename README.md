@@ -1,7 +1,7 @@
 # Entrabot: Identity Research for Microsoft 365 Agents
 
 
-Entrabot is a research project. It is a Python MCP server that gives a device-local agent its own Entra **Agent ID** and an **Agent User** that has all the capabilities of a human user in a Microsoft tenant. It can have a Teams presence and be invited to meetings to chat with your colleagues 1:1, a mailbox it can monitor and respond to, create and edit Word documents, make PowerPoint presentations, and allows you to access your CLI. The agent signs in autonomously, sends Teams messages from its own account, and writes audit events against its own object ID. It runs on macOS, Linux, and Windows, and works with Claude Code, Copilot CLI, or any MCP-speaking client.
+Entrabot is a Python MCP server that gives a device-local agent its own Entra **Agent ID** and an **Agent User** that has all the capabilities of a human user in a Microsoft tenant. It can have a Teams presence and be invited to meetings to chat with your colleagues 1:1, a mailbox it can monitor and respond to, create and edit Word documents, make PowerPoint presentations, and allows you to access your CLI. The agent signs in autonomously, sends Teams messages from its own account, and writes audit events against its own object ID. It runs on macOS, Linux, and Windows, and works with Claude Code, Copilot CLI, or any MCP-speaking client.
 
 **All you need to get started is:**
 
@@ -89,14 +89,45 @@ Full walkthrough in [`docs/architecture/system-overview.md`](docs/architecture/s
 Mac or Linux:
 
 ```bash
-git clone https://github.com/microsoft/entrabot.git
-cd Entrabot
+git clone https://github.com/brandwe/entrabot-identity-research.git
+cd entrabot-identity-research
 ./scripts/setup.sh --new --with-upn-suffix=yourname
 source .venv/bin/activate
 claude --dangerously-load-development-channels server:entrabot
 ```
 
 `setup.sh` is idempotent. It provisions the Blueprint, BlueprintPrincipal, Agent Identity, and Agent User; assigns a Teams-capable license; uploads a self-signed certificate to Entra; and writes `.env` plus `.mcp.json` with no secrets on disk. Full walkthrough — including Windows, cloud memory, cross-tenant group chats, and the Work IQ Word setup — is in [`docs/getting-started/quickstart.md`](docs/getting-started/quickstart.md) and [`INSTALL.md`](INSTALL.md).
+
+### Launching the agent
+
+The repo isn't published to npm/pypi — your host CLI loads the local stdio MCP server from `.mcp.json` in the cwd. No flag needed for that; it's auto-discovered. What differs between hosts is **how inbound Teams DMs reach the agent**.
+
+**Claude Code (recommended).** Channel push: inbound Teams messages and emails arrive as next-turn system reminders without a tool call. Requires the dev-channel allowlist flag:
+
+```bash
+claude --dangerously-load-development-channels server:entrabot
+```
+
+The double-dash matters — single-dash silently treats `server:entrabot` as prompt text (Learning #44). `server:entrabot` is the MCP server name from `.mcp.json`, not a publication identifier.
+
+**GitHub Copilot CLI, Codex, Cursor, other non-Claude hosts.** MCP tools work, but there's no `notifications/claude/channel` equivalent — channel push is silently absent. Inbound Teams messages instead arrive **inline** as `sponsor_reply` on `send_teams_message`, which auto-blocks until the sponsor replies (host-detected, server-side).
+
+```bash
+copilot   # or: codex, cursor, etc. — no flag, just launch from the repo dir
+```
+
+While the agent is blocked waiting on a Teams reply (any host that calls `wait_for_sponsor_dm` explicitly), the host CLI shows a heartbeat animation so you know it's listening to Teams, not your keyboard:
+
+```
+           __
+      (___()'`;  woof! 🐕
+      /,    /`
+      \"--\
+
+(•ᴗ•) zZz... listening for Teams DM [42s] (Ctrl+C to break)
+```
+
+Frames cycle (`ʕ•ᴥ•ʔ waiting on sponsor`, `(´･ω･`) sponsor hasn't replied yet`, `(◕‿◕) still here, still waiting`, …) every ~30s with elapsed time. Ctrl+C breaks out cleanly. Full host-by-host protocol: [`docs/claude-copilot-cli-channel-port.md`](docs/claude-copilot-cli-channel-port.md) and [`prompts/anatomy/channel-discipline.md`](prompts/anatomy/channel-discipline.md).
 
 After setup, use `./status.sh` as the canonical health and identity check:
 
@@ -110,7 +141,7 @@ After setup, use `./status.sh` as the canonical health and identity check:
 
 ## Documentation
 
-The full doc site: **<https://microsoft.github.io/entrabot/>**
+The full doc site: **<https://brandonwerner.com/entrabot-identity-research/>**
 
 Direct pointers:
 
@@ -163,25 +194,6 @@ This is a research repo, not a production service. It runs reliably on a develop
 
 ## Contributing
 
-This project welcomes contributions and suggestions. Most contributions require you to agree to a Contributor License Agreement (CLA) declaring that you have the right to, and do grant us the rights to use your contribution. For details, visit <https://cla.opensource.microsoft.com>.
-
-When you submit a pull request, a CLA bot automatically determines whether you need to provide a CLA and decorates the PR appropriately. Follow the bot's instructions. You only need to do this once across all repositories using the Microsoft CLA.
-
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information, see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with questions or comments.
-
 Test discipline is the contract. TDD: failing test first, implementation second. `pytest -v && ruff check .` must pass before every commit; coverage threshold is 80%.
 
 File issues for bugs and platform questions. PRs welcome — for anything touching auth, Teams, or the body prompt, read [`docs/runbooks/hard-won-learnings.md`](docs/runbooks/hard-won-learnings.md) first. The hard-won learnings file is append-only; new gotchas get numbered entries, never deletions.
-
-Useful links:
-
-- [Code of Conduct](https://opensource.microsoft.com/codeofconduct/)
-- [Security policy](SECURITY.md)
-- [MIT License](LICENSE)
-- [Microsoft Open Source](https://opensource.microsoft.com/)
-- [Microsoft Privacy Statement](https://privacy.microsoft.com/privacystatement)
-- [Microsoft Trademarks](https://www.microsoft.com/legal/intellectualproperty/trademarks)
-
-## Disclaimer
-
-*This is a prototype. Flexible FIC and Entra Agent Identity are preview surfaces — APIs may change. The platform is designed to show the pattern and to be copyable, not to be run as-is in production.*
